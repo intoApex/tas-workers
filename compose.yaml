@@ -1,0 +1,18 @@
+# Services for the TAS workers server. No keys anywhere: public data only.
+services:
+  okx-copytrading:
+    image: python:3.12-slim
+    restart: unless-stopped
+    command: ["python", "-u", "/app/snapshot.py"]
+    volumes:
+      - ./okx:/app:ro
+      - /srv/tas/data:/data
+      - /srv/tas/public:/public
+    environment:
+      OKX_TOP_N: "200"
+      OKX_MAX_PAGES: "60"
+      OKX_RUN_HOUR: "1"
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: {max-size: "5m", max-file: "2"}

@@ -23,3 +23,7 @@ how the numbers on the site are produced.
 ## License
 
 MIT
+
+## Services
+
+- `okx-copytrading` (compose.yaml, okx/snapshot.py): once a day, a snapshot of OKX's official public copy-trading endpoints (lead trader ranks, daily and weekly PnL, closed positions). Raw data stays on the server; https://workers.tradingagentstack.com/okx-status.json shows counts only.
