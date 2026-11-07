@@ -137,7 +137,7 @@ def run_once():
                "lookahead_checked": sum(r.get("lookahead_bias") is not None for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
                "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Strategies flagged by Freqtrade's lookahead analysis are marked."}
-    save_json(os.path.join(PUB, "results.json"), {"summary": summary, "results": results})
+    save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
     save_json(os.path.join(PUB, "status.json"), summary)
     open(os.path.join(UD, ".last_run_v3"), "w").write(str(today))
     log("done", json.dumps(summary)[:400])
