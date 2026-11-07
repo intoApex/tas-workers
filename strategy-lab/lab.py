@@ -14,6 +14,7 @@ SOURCES = [  # (label, zip url, path prefix inside the zip that holds strategies
 SKIP_DIRS = ("futures/", "hyperopts/", "lookahead_bias/")
 TFS = ["5m", "15m", "1h", "4h", "1d"]
 RUN_HOUR = int(os.environ.get("LAB_RUN_HOUR", "2"))
+BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
 LOOKAHEAD_PER_DAY = int(os.environ.get("LAB_LOOKAHEAD_PER_DAY", "6"))
 REG = os.path.join(UD, "registry.json")
 
@@ -120,26 +121,32 @@ def run_once():
         added = dt.date.fromisoformat(meta["added"]); days = (today - added).days
         r = {"strategy": n, "source": meta.get("source"), "added": meta["added"], "days_live": days, "lookahead_bias": meta.get("lookahead_bias")}
         if n not in names: r.update(status="not_loadable")
-        elif days < 1: r.update(status="waiting")
-        else: r.update(backtest(n, added))
+        else:
+            # Labelled backtest on the last 45 days (published at once, never called a track record),
+            # plus the live, out-of-sample record that grows every day from the day the strategy was added.
+            bt = backtest(n, today - dt.timedelta(days=BACKTEST_DAYS))
+            r["backtest"] = dict(bt, days=BACKTEST_DAYS, label="backtest")
+            r["status"] = bt.get("status")
+            if days >= 1:
+                r["live"] = dict(backtest(n, added), label="live since " + meta["added"])
         results.append(r); log("result", n, r.get("status"), r.get("profit_total"))
     save_json(REG, reg)
     summary = {"at": dt.datetime.utcnow().isoformat() + "Z", "strategies": len(results),
-               "ok": sum(r.get("status") == "ok" for r in results), "waiting": sum(r.get("status") == "waiting" for r in results),
+               "ok": sum(r.get("status") == "ok" for r in results), "live_days": max([r.get("days_live", 0) for r in results] or [0]),
                "errors": sum(r.get("status") == "error" for r in results), "lookahead_flagged": sum(r.get("lookahead_bias") is True for r in results),
                "lookahead_checked": sum(r.get("lookahead_bias") is not None for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
-               "method": "Out of sample only: each strategy is scored on Binance spot candles after the day it was added, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included."}
+               "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Strategies flagged by Freqtrade's lookahead analysis are marked."}
     save_json(os.path.join(PUB, "results.json"), {"summary": summary, "results": results})
     save_json(os.path.join(PUB, "status.json"), summary)
-    open(os.path.join(UD, ".last_run_v2"), "w").write(str(today))
+    open(os.path.join(UD, ".last_run_v3"), "w").write(str(today))
     log("done", json.dumps(summary)[:400])
 
 if __name__ == "__main__":
     os.makedirs(PUB, exist_ok=True)
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
-        last = open(os.path.join(UD, ".last_run_v2")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v2")) else ""
+        last = open(os.path.join(UD, ".last_run_v3")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v3")) else ""
         if last != str(dt.datetime.utcnow().date()) and (dt.datetime.utcnow().hour >= RUN_HOUR or not last):
             try: run_once()
             except Exception as e:
