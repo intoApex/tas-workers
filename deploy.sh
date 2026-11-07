@@ -33,7 +33,7 @@ done
 
 # Derived public files (hourly): OKX lead-trader records from the latest snapshot.
 stamp="$DATA/.okx_metrics.last"
-if [ ! -f "$stamp" ] || [ -n "$(find "$stamp" -mmin +59 2>/dev/null)" ] || [ okx/metrics.py -nt "$stamp" ]; then
+if [ ! -f "$stamp" ] || [ -n "$(find "$stamp" -mmin +59 2>/dev/null)" ] || [ okx/metrics.py -nt "$stamp" ] || [ -n "$(find "$DATA/okx" -name detail.json.gz -newer "$stamp" 2>/dev/null | head -1)" ]; then
   timeout 300 python3 okx/metrics.py >/dev/null 2>"$DATA/okx_metrics.err"; touch "$stamp"
 fi
 
