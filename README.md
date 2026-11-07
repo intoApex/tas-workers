@@ -1,2 +1,25 @@
 # tas-workers
-TradingAgentStack workers: paper-trading bots and public-data snapshot jobs. No keys, ever.
+
+The jobs [TradingAgentStack](https://tradingagentstack.com) runs on its own server: paper-trading bots
+and snapshots of public data, such as copy-trading leaderboards. The code is public so anyone can check
+how the numbers on the site are produced.
+
+## How it runs
+
+- The server (Vultr, Frankfurt) pulls this repo every 10 minutes and runs `deploy.sh`.
+  Nothing is copied to it by hand, and nobody logs in to change it: a change here is a change there.
+- Services are defined in `compose.yaml` and run under Docker.
+- Results are published read-only at `https://workers.tradingagentstack.com/`:
+  - `status.json`: the server's health and which exchange endpoints answer from it
+  - `deploy.json`: the commit that is running and its containers
+
+## Rules
+
+- **No keys, ever.** No exchange API keys, tokens, passwords or wallet keys in this repo or on the server.
+  Bots run in dry-run (paper) mode on public market data, so they can't place a real order.
+- **Public data only**, through public or official endpoints, at a polite rate.
+- Every published number keeps the date it was measured and the source it came from.
+
+## License
+
+MIT
