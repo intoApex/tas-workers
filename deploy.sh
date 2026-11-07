@@ -22,6 +22,15 @@ else
   compose_state="no services yet"
 fi
 
+# Probes: one-off checks of public endpoints, run at most once an hour each (results in $PUBLIC/probe-*.json).
+for probe in probes/*.sh; do
+  [ -x "$probe" ] || continue
+  stamp="$DATA/.$(basename "$probe").last"
+  if [ ! -f "$stamp" ] || [ -n "$(find "$stamp" -mmin +59 2>/dev/null)" ]; then
+    timeout 120 "$probe" >/dev/null 2>&1; touch "$stamp"
+  fi
+done
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
