@@ -12,7 +12,7 @@ SOURCES = [  # (label, zip url, path prefix inside the zip that holds strategies
     ("freqtrade/freqtrade-strategies", "https://codeload.github.com/freqtrade/freqtrade-strategies/zip/refs/heads/main", "freqtrade-strategies-main/user_data/strategies/"),
 ]
 SKIP_DIRS = ("futures/", "hyperopts/", "lookahead_bias/")
-TFS = ["5m", "15m", "1h", "4h", "1d"]
+TFS = ["1m", "5m", "15m", "1h", "4h", "1d"]  # 1m: several official scalping strategies run on it
 RUN_HOUR = int(os.environ.get("LAB_RUN_HOUR", "2"))
 BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
 LOOKAHEAD_PER_DAY = int(os.environ.get("LAB_LOOKAHEAD_PER_DAY", "6"))
@@ -72,10 +72,16 @@ def parse_last_backtest():
         return json.loads(z.read(name))
     return json.load(open(path))
 
-def backtest(name, start):
+def backtest(name, start, tf=None):
     code, out = sh(["freqtrade", "backtesting", "-c", CFG, "--userdir", UD, "--strategy", name,
-                    "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"], 1200)
-    if code != 0: return {"status": "error", "error": out[-600:]}
+                    "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"]
+                   + (["--timeframe", tf] if tf else []), 1200)
+    if code != 0:
+        if not tf and "Timeframe needs to be set" in out:  # example strategies that leave the timeframe to the user
+            return dict(backtest(name, start, "5m"), timeframe_note="not set by the strategy; run on 5m")
+        if "can_short" in out:  # the lab trades spot, so futures-only strategies are listed but not run
+            return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
+        return {"status": "error", "error": out[-600:]}
     s = parse_last_backtest()["strategy"].get(name, {})
     trades = s.get("trades", [])
     return {"status": "ok", "timeframe": s.get("timeframe"), "trades": s.get("total_trades", len(trades)),
@@ -139,14 +145,14 @@ def run_once():
                "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Strategies flagged by Freqtrade's lookahead analysis are marked."}
     save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
     save_json(os.path.join(PUB, "status.json"), summary)
-    open(os.path.join(UD, ".last_run_v3"), "w").write(str(today))
+    open(os.path.join(UD, ".last_run_v4"), "w").write(str(today))
     log("done", json.dumps(summary)[:400])
 
 if __name__ == "__main__":
     os.makedirs(PUB, exist_ok=True)
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
-        last = open(os.path.join(UD, ".last_run_v3")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v3")) else ""
+        last = open(os.path.join(UD, ".last_run_v4")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v4")) else ""
         if last != str(dt.datetime.utcnow().date()) and (dt.datetime.utcnow().hour >= RUN_HOUR or not last):
             try: run_once()
             except Exception as e:
