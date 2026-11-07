@@ -12,6 +12,7 @@ services:
       OKX_TOP_N: "200"
       OKX_MAX_PAGES: "60"
       OKX_RUN_HOUR: "1"
+      CODE_REV: "2"
     mem_limit: 256m
     logging:
       driver: json-file
