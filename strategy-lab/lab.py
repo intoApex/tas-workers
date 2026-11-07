@@ -102,6 +102,7 @@ def run_once():
     reg = load_reg(); reg.setdefault("files", {}); reg.setdefault("strategies", {})
     fetch_sources(reg["files"])
     names, list_err = list_strategies()
+    if not names: raise RuntimeError("no strategies loaded: " + (list_err or "")[-400:])
     cf = class_files()
     for n in names:
         if n not in reg["strategies"]:
@@ -131,14 +132,14 @@ def run_once():
                "method": "Out of sample only: each strategy is scored on Binance spot candles after the day it was added, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included."}
     save_json(os.path.join(PUB, "results.json"), {"summary": summary, "results": results})
     save_json(os.path.join(PUB, "status.json"), summary)
-    open(os.path.join(UD, ".last_run"), "w").write(str(today))
+    open(os.path.join(UD, ".last_run_v2"), "w").write(str(today))
     log("done", json.dumps(summary)[:400])
 
 if __name__ == "__main__":
     os.makedirs(PUB, exist_ok=True)
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
-        last = open(os.path.join(UD, ".last_run")).read().strip() if os.path.exists(os.path.join(UD, ".last_run")) else ""
+        last = open(os.path.join(UD, ".last_run_v2")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v2")) else ""
         if last != str(dt.datetime.utcnow().date()) and (dt.datetime.utcnow().hour >= RUN_HOUR or not last):
             try: run_once()
             except Exception as e:

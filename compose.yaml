@@ -29,6 +29,7 @@ services:
       - /srv/tas/public:/public
     environment:
       LAB_RUN_HOUR: "2"
+      PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "6"
     mem_limit: 2g
     cpus: 1.5
