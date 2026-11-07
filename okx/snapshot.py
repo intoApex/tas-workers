@@ -19,7 +19,7 @@ def get(path, **q):
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=20) as r:
                 j = json.loads(r.read().decode())
-            time.sleep(0.5)
+            time.sleep(1.0)
             if j.get("code") == "0":
                 return j.get("data", [])
             if j.get("code") in ("50011", "50061"):  # rate limited
