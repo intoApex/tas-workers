@@ -37,6 +37,12 @@ if [ ! -f "$stamp" ] || [ -n "$(find "$stamp" -mmin +59 2>/dev/null)" ] || [ okx
   timeout 300 python3 okx/metrics.py >/dev/null 2>"$DATA/okx_metrics.err"; touch "$stamp"
 fi
 
+# dHEDGE vaults (daily, after 00:30 UTC): raw snapshot kept on the server, public summary in $PUBLIC/dhedge/vaults.json.
+day="$(date -u +%F)"
+if [ "$(date -u +%H%M)" -ge 0030 ] && { [ "$(cat "$DATA/.dhedge.day" 2>/dev/null)" != "$day" ] || [ dhedge/snapshot.py -nt "$DATA/.dhedge.day" ]; }; then
+  timeout 300 python3 dhedge/snapshot.py >"$DATA/dhedge.log" 2>&1 && echo "$day" > "$DATA/.dhedge.day"
+fi
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
