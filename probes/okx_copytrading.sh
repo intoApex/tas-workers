@@ -10,7 +10,7 @@ get() { curl -sS --max-time 20 -A "$UA" -w '\n%{http_code}' "$1" 2>/dev/null; }
 row() { # name url -> json summary; also prints body to fd 3
   local r body code; r=$(get "$2"); code=${r##*$'\n'}; body=${r%$'\n'*}
   printf '%s' "$body" > "/tmp/okx_$1.json"
-  jq -n --arg name "$1" --arg path "${2#https://www.okx.com}" --arg http "$code" --slurpfile b <(printf '%s' "$body" | jq -c . 2>/dev/null || echo '{}') '
+  jq -n --arg name "$1" --arg path "$(printf '%s' "${2#https://www.okx.com}" | sed -E 's/uniqueCode=[^&]+/uniqueCode=REDACTED/')" --arg http "$code" --slurpfile b <(printf '%s' "$body" | jq -c . 2>/dev/null || echo '{}') '
     ($b[0] // {}) as $j |
     ($j.data // []) as $d |
     {name:$name, path:$path, http:$http, code:($j.code // null), msg:($j.msg // null),
