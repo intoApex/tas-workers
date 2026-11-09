@@ -43,6 +43,12 @@ if [ "$(date -u +%H%M)" -ge 0030 ] && { [ "$(cat "$DATA/.dhedge.day" 2>/dev/null
   timeout 300 python3 dhedge/snapshot.py >"$DATA/dhedge.log" 2>&1 && echo "$day" > "$DATA/.dhedge.day"
 fi
 
+# Vaults on more venues (daily, after 00:45 UTC): Paradex, Orderly and Kamino from their own public APIs.
+# Raw lists stay on the server; public summaries in $PUBLIC/vaults/<venue>.json, health in $PUBLIC/vaults/status.json.
+if [ "$(date -u +%H%M)" -ge 0045 ] && { [ "$(cat "$DATA/.vaults.day" 2>/dev/null)" != "$day" ] || [ vaults/scan.py -nt "$DATA/.vaults.day" ]; }; then
+  timeout 600 python3 vaults/scan.py >"$DATA/vaults.log" 2>&1; echo "$day" > "$DATA/.vaults.day"
+fi
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
