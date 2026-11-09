@@ -11,6 +11,12 @@ Venues (all public endpoints, no login):
   paradex  https://api.prod.paradex.trade/v1/vaults and /v1/vaults/summary   (perp DEX vaults, Starknet)
   orderly  https://api-sv.orderly.org/v1/public/strategy_vault/vault/info    (Orderly strategy vaults)
   kamino   https://api.kamino.finance/strategies/metrics?env=mainnet-beta    (automated liquidity strategies, Solana)
+  grvt     https://edge.grvt.io/query (vault list) and https://market-data.grvt.io/full/v1/vault_detail, vault_summary_history
+           (perp DEX strategy vaults; the venue publishes each vault's share price every 8 hours since launch)
+  hibachi  https://data-api.hibachi.xyz/vault/info and /vault/performance   (perp DEX vaults; daily share price since launch)
+  lagoon   https://app.lagoon.finance/api/vaults and /api/vault             (on-chain ERC-7540 vaults run by curators, many chains)
+Where the venue publishes a vault's share-price history (GRVT, Hibachi), the record is computed from that full history;
+everywhere else it is computed from the daily share prices we save ourselves, so it starts on the day we started tracking.
 A venue that fails keeps yesterday's public file; the others still run.
 """
 import datetime as dt, gzip, json, os, sys, time, urllib.request
@@ -19,9 +25,27 @@ DATA = os.environ.get("VAULTS_DATA", "/srv/tas/data/vaults")
 PUB = os.environ.get("VAULTS_PUBLIC", "/srv/tas/public/vaults")
 UA = "TradingAgentStack-workers/1.0 (+https://tradingagentstack.com/about/; public data, once a day)"
 
-def get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+def get(url, body=None):
+    h = {"User-Agent": UA, "Accept": "application/json"}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode(); h["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=h)
     return json.loads(urllib.request.urlopen(req, timeout=60).read())
+
+def iso_ts(x):
+    try:
+        return int(dt.datetime.strptime(x[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
+    except Exception:
+        return None
+
+def daily(points):
+    # points: [(unix_seconds, price)] -> [(YYYY-MM-DD, last price of that UTC day)]
+    out = {}
+    for t, p in sorted(points):
+        if p and p > 0:
+            out[dt.datetime.utcfromtimestamp(t).date().isoformat()] = p
+    return sorted(out.items())
 
 def num(x):
     try:
@@ -88,7 +112,102 @@ def kamino():
                      "venue_reported": {"apy_7d": num(k.get("apy7d")), "apy_30d": num(k.get("apy30d"))}})
     return d, rows
 
-VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000)}
+GRVT_Q = """query V($first: Int, $where: VaultWhereInput) { vaults(first: $first, where: $where) { totalCount edges { node {
+  id name chainVaultID type status managerName description managementFee performanceFee createTime mappedCategories { name } } } } }"""
+
+def grvt():
+    g = get("https://edge.grvt.io/query", {"query": GRVT_Q, "variables": {"first": 500, "where": {}}})
+    nodes = [e["node"] for e in (((g.get("data") or {}).get("vaults") or {}).get("edges") or [])]
+    if len(nodes) < 5:
+        raise RuntimeError(f"only {len(nodes)} vaults listed")
+    ids = [str(n["chainVaultID"]) for n in nodes if n.get("chainVaultID")]
+    det = {str(r.get("vault_id")): r for r in (get("https://market-data.grvt.io/full/v1/vault_detail", {"vault_i_ds": ids}).get("result") or [])}
+    rows, hist_raw = [], {}
+    for n in nodes:
+        if str(n.get("status") or "").lower() != "active":
+            continue
+        cid = str(n.get("chainVaultID")); d = det.get(cid, {})
+        row = {"id": n.get("id"), "name": n.get("name"), "manager": n.get("managerName"),
+               "kind": ", ".join(c["name"] for c in (n.get("mappedCategories") or []) if c.get("name")) or n.get("type"),
+               "url": "https://grvt.io/exchange/strategies", "tvl_usd": num(d.get("total_equity")), "share_price": num(d.get("share_price")),
+               "created": iso_ts(n.get("createTime")),
+               "fees_pct": {"management": (num(n.get("managementFee")) or 0) / 1e4, "performance": (num(n.get("performanceFee")) or 0) / 1e4},
+               "description": (n.get("description") or "")[:300]}
+        if (row["tvl_usd"] or 0) >= 10_000:
+            time.sleep(0.6)
+            try:
+                h = get("https://market-data.grvt.io/full/v1/vault_summary_history", {"vault_id": cid}).get("result") or []
+                hist_raw[cid] = h
+                row["venue_history"] = daily([(int(x["event_time"]) // 10**9, num(x.get("share_price"))) for x in h if x.get("event_time")])
+            except Exception as e:
+                row["history_error"] = str(e)[:120]
+        rows.append(row)
+    return {"vaults": nodes, "detail": list(det.values()), "history": hist_raw}, rows
+
+def hibachi():
+    vs = get("https://data-api.hibachi.xyz/vault/info")
+    vs = vs if isinstance(vs, list) else (vs.get("vaults") or [])
+    if not vs:
+        raise RuntimeError("no vaults listed")
+    rows, perf = [], {}
+    for v in vs:
+        vid = v.get("vaultId"); time.sleep(0.6)
+        p = get(f"https://data-api.hibachi.xyz/vault/performance?vaultId={vid}&timeRange=All")
+        iv = p.get("vaultPerformanceIntervals") or []
+        perf[str(vid)] = iv
+        last = max(iv, key=lambda x: x.get("timestamp") or 0) if iv else {}
+        rows.append({"id": str(vid), "name": v.get("shortDescription") or v.get("symbol"), "manager": None, "kind": v.get("vaultType"),
+                     "symbol": v.get("symbol"), "url": "https://hibachi.xyz/vaults",
+                     "tvl_usd": num(last.get("totalValueLocked")) or ((num(v.get("perSharePrice")) or 0) * (num(v.get("outstandingShares")) or 0)),
+                     "share_price": num(v.get("perSharePrice")),
+                     # Hibachi publishes fees as fractions (0.1 = 10%)
+                     "fees_pct": {k: (x * 100 if x is not None and x <= 1 else x) for k, x in (("management", num(v.get("managementFees"))), ("performance", num(v.get("performanceFees"))))},
+                     "venue_reported": {"max_drawdown": num(v.get("maxDrawdown")), "sharpe": num(v.get("sharpeRatio"))},
+                     "venue_history": daily([(int(x["timestamp"]), num(x.get("perSharePrice"))) for x in iv if x.get("timestamp")]),
+                     "description": (v.get("description") or "")[:300]})
+    return {"vaults": vs, "performance": perf}, rows
+
+LAGOON = "https://app.lagoon.finance/api"
+
+def lagoon():
+    listed, page = [], 0
+    while page < 20:
+        d = get(f"{LAGOON}/vaults?pageIndex={page}&pageSize=100")
+        listed += d.get("vaults") or []
+        if not d.get("hasNextPage"):
+            break
+        page += 1; time.sleep(0.5)
+    if len(listed) < 20:
+        raise RuntimeError(f"only {len(listed)} vaults listed")
+    rows, details = [], []
+    for v in listed:
+        st = v.get("state") or {}
+        tvl = num(st.get("totalAssetsUsd"))
+        if not v.get("isVisible") or (tvl or 0) < 100_000:
+            continue
+        ch = (v.get("chain") or {}).get("id"); addr = (v.get("address") or "").lower()
+        time.sleep(0.4)
+        try:
+            dd = get(f"{LAGOON}/vault?chainId={ch}&address={addr}")
+        except Exception:
+            continue
+        details.append(dd); s2 = dd.get("state") or {}
+        dec = int(((dd.get("asset") or {}).get("decimals")) or 18)
+        pps = num(s2.get("pricePerShare"))
+        cur = ", ".join(c.get("name") for c in (dd.get("curators") or v.get("curators") or []) if c.get("name"))
+        apr = lambda k: num(((s2.get(k) or {}).get("linearNetAprWithoutExtraYields")))
+        rows.append({"id": f"{ch}:{addr}", "name": v.get("name"), "manager": cur or None,
+                     "kind": (v.get("strategyCategory") or {}).get("label"), "chain": (v.get("chain") or {}).get("name"),
+                     "asset": (v.get("asset") or {}).get("symbol"), "address": addr,
+                     "url": f"https://app.lagoon.finance/vault/{ch}/{addr}", "tvl_usd": tvl,
+                     # share price in the vault's own asset (USDC, ETH...), so the record is the strategy's return in that asset
+                     "share_price": pps / 10 ** dec if pps else None,
+                     "venue_reported": {"apr_7d": apr("weeklyApr"), "apr_30d": apr("monthlyApr"), "apr_inception": apr("inceptionApr")},
+                     "description": (dd.get("shortDescription") or dd.get("description") or "")[:300]})
+    return {"vaults": listed, "details": details}, rows
+
+VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
+          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000)}
 
 # ---------- shared: save, history, record, publish ----------
 
@@ -127,18 +246,36 @@ def record(series):
     for _, p in series:
         peak = max(peak, p); worst = min(worst, p / peak - 1)
     d0 = dt.date.fromisoformat(series[0][0]); d1 = dt.date.fromisoformat(series[-1][0])
-    return {"tracking_since": series[0][0], "tracking_days": (d1 - d0).days, "return_tracked": round(last / first - 1, 6), "max_drawdown_tracked": round(worst, 6)}
+    days = (d1 - d0).days
+    out = {"tracking_since": series[0][0], "tracking_days": days, "return_tracked": round(last / first - 1, 6), "max_drawdown_tracked": round(worst, 6)}
+    if days >= 30:
+        # annualised, so vaults with records of different lengths can be compared; only shown from 30 days
+        out["annualised_tracked"] = round((last / first) ** (365 / days) - 1, 6)
+    if days >= 90:
+        old = [p for d, p in series if dt.date.fromisoformat(d) <= d1 - dt.timedelta(days=90)]
+        if old:
+            out["return_90d_tracked"] = round(last / old[-1] - 1, 6)
+    return out
 
 def run(venue, fn, min_tvl, today):
     raw, rows = fn()
     save_day(venue, today, raw)
     save_prices(venue, today, rows)
     hist = history(venue)
-    keep = [{**r, **record(hist.get(r["id"], []))} for r in rows if (r.get("tvl_usd") or 0) >= min_tvl and r.get("share_price")]
+    keep = []
+    for r in rows:
+        if (r.get("tvl_usd") or 0) < min_tvl or not r.get("share_price"):
+            continue
+        vh = r.pop("venue_history", None)
+        if vh and len(vh) >= 2:
+            # the venue's own published share prices since launch; we compute the record from them
+            keep.append({**r, **record(vh), "computed_from": "venue share-price history"})
+        else:
+            keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": "our daily snapshots"})
     keep.sort(key=lambda r: -(r["tvl_usd"] or 0))
     os.makedirs(PUB, exist_ok=True)
     doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "vaults": keep,
-           "note": "venue_reported figures are the venue's own; *_tracked figures are computed by TradingAgentStack from daily share prices it saved itself."}
+           "note": "venue_reported figures are the venue's own; *_tracked figures are computed by TradingAgentStack, from the venue's published share-price history where it has one (computed_from) and otherwise from daily share prices we saved ourselves."}
     tmp = os.path.join(PUB, f"{venue}.json.tmp")
     with open(tmp, "w") as fh:
         json.dump(doc, fh, separators=(",", ":"))
