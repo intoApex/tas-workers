@@ -77,7 +77,19 @@ def paradex():
                      "venue_reported": {"return_30d": num(s.get("roi_30d")), "return_total": num(s.get("total_roi")),
                                         "max_drawdown": (-num(s.get("max_drawdown"))) if num(s.get("max_drawdown")) is not None else None},
                      "description": (m.get("strategy_description") or m.get("description") or "")[:300]})
-    return {"vaults": meta, "summary": summ}, rows
+    # Paradex publishes each vault's share price since launch (public, no key), so big vaults get their whole record
+    hist_raw = {}
+    for r in rows:
+        if (r.get("tvl_usd") or 0) < 10_000:
+            continue
+        time.sleep(0.5)
+        try:
+            h = (get(f"https://api.prod.paradex.trade/v1/vaults/history?address={r['id']}&type=price&resolution=alltime").get("results") or [{}])[0]
+            hist_raw[r["id"]] = h
+            r["venue_history"] = daily([(int(t) // 1000, num(x)) for t, x in zip(h.get("timestamps") or [], h.get("data") or [])])
+        except Exception as e:
+            r["history_error"] = str(e)[:120]
+    return {"vaults": meta, "summary": summ, "history": hist_raw}, rows
 
 def orderly():
     d = get("https://api-sv.orderly.org/v1/public/strategy_vault/vault/info")
