@@ -14,8 +14,10 @@ os.makedirs(root + "/bin", exist_ok=True); shim = root + "/bin/freqtrade"
 open(shim, "w").write(f'#!/bin/sh\nexec "{sys.executable}" "{here}/ft_offline.py" "$@"\n'); os.chmod(shim, os.stat(shim).st_mode | stat.S_IEXEC)
 os.environ["PATH"] = root + "/bin:" + os.environ["PATH"]
 spec = importlib.util.spec_from_file_location("lab", os.path.join(here, "..", "lab.py")); lab = importlib.util.module_from_spec(spec); spec.loader.exec_module(lab)
-lab.UD = root + "/user_data"; lab.REG = lab.UD + "/registry.json"; lab.CFG = os.path.join(here, "..", "config.json")
-lab.PUB = root + "/public/strategy-lab"; lab.BASELINES = os.path.join(here, "..", "baselines")
+lab.UD = root + "/user_data"; lab.REG = lab.UD + "/registry.json"  # LAB_MODE=futures runs the leverage board instead
+lab.CFG = os.path.join(here, "..", "config-futures.json" if lab.FUT else "config.json")
+lab.PUB = root + ("/public/strategy-lab-futures" if lab.FUT else "/public/strategy-lab")
+lab.BASELINES = os.path.join(here, "..", "baselines-futures" if lab.FUT else "baselines")
 SHA = "0123456789abcdef0123456789abcdef01234567"
 lab.PINNED = [("tas-test/pinned-a", SHA, ("strategies/", "helper/", "tests/"), ())]
 lab.BT_TIMEOUT = int(os.environ.get("T", "40")); lab.LOOKAHEAD_PER_DAY = int(os.environ.get("LA", "2"))

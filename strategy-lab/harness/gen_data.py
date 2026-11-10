@@ -23,5 +23,13 @@ for p in PAIRS:
         d = df if rule is None else df.set_index("date").resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna().reset_index()
         d = d.astype({"open": "float64", "high": "float64", "low": "float64", "close": "float64", "volume": "float64"})
         d["date"] = d["date"].astype("datetime64[ms, UTC]")
-        d.reset_index(drop=True).to_feather(os.path.join(out, f"{p}_USDT-{tf}.feather"), compression_level=9, compression="lz4")
-print("wrote", len(PAIRS), "pairs x 6 timeframes,", days, "days")
+        d = d.reset_index(drop=True)
+        d.to_feather(os.path.join(out, f"{p}_USDT-{tf}.feather"), compression_level=9, compression="lz4")
+        # the same candles again as a USDT perpetual, plus hourly mark prices and funding rates, for the leverage board
+        os.makedirs(os.path.join(out, "futures"), exist_ok=True)
+        d.to_feather(os.path.join(out, "futures", f"{p}_USDT_USDT-{tf}-futures.feather"), compression_level=9, compression="lz4")
+        if tf == "1h":
+            d.to_feather(os.path.join(out, "futures", f"{p}_USDT_USDT-1h-mark.feather"), compression_level=9, compression="lz4")
+            fr = pd.DataFrame({"date": d["date"], "funding_rate": np.where(d["date"].dt.hour % 8 == 0, 0.0001, 0.0)})
+            fr.to_feather(os.path.join(out, "futures", f"{p}_USDT_USDT-1h-funding_rate.feather"), compression_level=9, compression="lz4")
+print("wrote", len(PAIRS), "pairs x 6 timeframes, spot and futures,", days, "days")

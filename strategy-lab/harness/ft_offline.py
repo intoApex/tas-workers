@@ -11,6 +11,10 @@ def _markets():
                     "precision": {"amount": 1e-05, "price": 1e-08, "base": 1e-08, "quote": 1e-08},
                     "limits": {"amount": {"min": 1e-05, "max": 9e9}, "price": {"min": 1e-08, "max": 1e9}, "cost": {"min": 5.0, "max": 9e9}, "leverage": {"min": None, "max": None}, "market": {"min": 0, "max": 1e9}},
                     "created": None, "info": {"status": "TRADING", "permissions": ["SPOT"]}})
+        out.append(dict(out[-1], id=b + "USDT_PERP", symbol=b + "/USDT:USDT", settle="USDT", settleId="USDT", type="swap", spot=False, swap=True,
+                        contract=True, linear=True, inverse=False, contractSize=1.0, taker=0.0005, maker=0.0002,
+                        precision={"amount": 0.001, "price": 1e-06, "base": 1e-08, "quote": 1e-08},
+                        info={"status": "TRADING", "contractType": "PERPETUAL"}))
     return out
 async def _aload(self, reload=False, params={}):
     return self.set_markets(_markets())
