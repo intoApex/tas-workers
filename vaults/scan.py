@@ -285,9 +285,36 @@ def onchain():
         raise RuntimeError(f"no vault could be read ({len(raw)} tried)")
     return {"vaults": raw, "prices": prices}, rows
 
+def d2():
+    # D2 Finance: options and derivatives trading vaults; the API publishes each vault's share value at every epoch since launch
+    d = get("https://d2.finance/api/vaults")
+    vs = d if isinstance(d, list) else (d.get("vaults") or d.get("data") or [])
+    if not vs:
+        raise RuntimeError("no vaults listed")
+    rows = []
+    for v in vs:
+        if not str(v.get("deleted_at") or "0001").startswith("0001"):
+            continue
+        pc = v.get("performance_chart_data") or []
+        if isinstance(pc, str):
+            try:
+                pc = json.loads(pc)
+            except Exception:
+                pc = []
+        hist = daily([(int(x["timestamp"]), num(str(x.get("value"))[:20])) for x in pc if x.get("timestamp") and x.get("value")])
+        net, tok, cat = v.get("network") or {}, v.get("token") or {}, v.get("category") or {}
+        pct = lambda x: num(x) / 100 if num(x) is not None else None
+        rows.append({"id": str(v.get("id")), "name": " ".join(x for x in (v.get("name"), v.get("second_name")) if x).strip(), "manager": "D2 Finance",
+                     "kind": cat.get("name"), "chain": net.get("name"), "asset": (tok.get("symbol") or tok.get("token_name") or "").split(" (")[0] or None,
+                     "address": (v.get("address") or "").lower(), "url": "https://d2.finance/", "tvl_usd": num(v.get("tvl_to_usd")),
+                     "share_price": hist[-1][1] if hist else None, "risk": v.get("risk_level"),
+                     "venue_reported": {"apr_last_epoch": pct(v.get("last_epoch_apr")), "apr_lifetime": pct(v.get("lifetime_apr"))},
+                     "venue_history": hist, "description": ""})
+    return {"vaults": vs}, rows
+
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
           "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000),
-          "onchain": (onchain, 50_000)}
+          "onchain": (onchain, 50_000), "d2": (d2, 10_000)}
 
 # ---------- shared: save, history, record, publish ----------
 
