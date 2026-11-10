@@ -44,6 +44,12 @@ BAD_ATTRS = {"__subclasses__", "__globals__", "__builtins__", "__import__", "__c
 STRIKES = 3  # runs in a row a strategy may time out or be killed before it is retired
 BT_TIMEOUT = int(os.environ.get("LAB_BT_TIMEOUT", "900"))
 LOOKAHEAD_TRIES = 2
+CODE_REV = os.environ.get("LAB_CODE_REV", "")
+
+def due(last_day, last_rev, now):
+    """Run once a day from RUN_HOUR, and at once when new code has been deployed since the last finished run."""
+    if last_day != str(now.date()): return now.hour >= RUN_HOUR or not last_day
+    return bool(CODE_REV) and last_rev != CODE_REV
 TFS = ["1m", "5m", "15m", "1h", "4h", "1d"]  # 1m: several official scalping strategies run on it
 RUN_HOUR = int(os.environ.get("LAB_RUN_HOUR", "2"))
 BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
@@ -282,6 +288,7 @@ def run_once():
     save_json(os.path.join(PUB, "not-admitted.json"), {"as_of": str(today), "about": "Files from the pinned community collections that were read and not admitted, with the reason.", "files": reg.get("rejected", {})})
     save_json(os.path.join(PUB, "status.json"), summary)
     open(os.path.join(UD, ".last_run_v4"), "w").write(str(today))
+    open(os.path.join(UD, ".last_run_rev"), "w").write(CODE_REV)
     log("done", json.dumps(summary)[:400])
 
 if __name__ == "__main__":
@@ -289,7 +296,8 @@ if __name__ == "__main__":
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
         last = open(os.path.join(UD, ".last_run_v4")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v4")) else ""
-        if last != str(dt.datetime.utcnow().date()) and (dt.datetime.utcnow().hour >= RUN_HOUR or not last):
+        rev = open(os.path.join(UD, ".last_run_rev")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_rev")) else ""
+        if due(last, rev, dt.datetime.utcnow()):
             try: run_once()
             except Exception as e:
                 log("run failed:", repr(e))
