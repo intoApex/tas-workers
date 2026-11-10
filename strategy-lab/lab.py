@@ -13,11 +13,20 @@ Raw data stays on the server; /public/strategy-lab/results.json holds the per-st
 """
 import ast, csv, datetime as dt, glob, hashlib, io, json, os, re, shutil, subprocess, time, urllib.request, zipfile
 
-UD = "/freqtrade/user_data"; CFG = "/app/config.json"; PUB = "/public/strategy-lab"
+# Two labs share this file, each in its own container with its own folders and results:
+# "spot" is the Strategy Lab; "futures" is the leverage board (Binance USDT perpetuals, isolated margin, shorting allowed).
+MODE = os.environ.get("LAB_MODE", "spot"); FUT = MODE == "futures"
+UD = "/freqtrade/user_data"
+CFG = "/app/config-futures.json" if FUT else "/app/config.json"
+PUB = "/public/strategy-lab-futures" if FUT else "/public/strategy-lab"
+_OFFICIAL = "https://codeload.github.com/freqtrade/freqtrade-strategies/zip/refs/heads/main"
 SOURCES = [  # (label, zip url, path prefix inside the zip that holds strategies)
-    ("freqtrade/freqtrade-strategies", "https://codeload.github.com/freqtrade/freqtrade-strategies/zip/refs/heads/main", "freqtrade-strategies-main/user_data/strategies/"),
+    ("freqtrade/freqtrade-strategies:futures/", _OFFICIAL, "freqtrade-strategies-main/user_data/strategies/futures/"),
+] if FUT else [
+    ("freqtrade/freqtrade-strategies:", _OFFICIAL, "freqtrade-strategies-main/user_data/strategies/"),
 ]
-SKIP_DIRS = ("futures/", "hyperopts/", "lookahead_bias/")
+SKIP_DIRS = () if FUT else ("futures/", "hyperopts/", "lookahead_bias/")
+LA_PAIRS = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"] if FUT else ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
 # Community collections: (owner/repo, commit, path prefixes inside the repo to read, extra imports or calls allowed for this source).
 # Each is pinned to one commit, so what runs here is exactly what was read when the line was added, and it is fetched once.
 # To take a newer version of a collection, add a new line with the new commit: files already here stay frozen.
@@ -55,7 +64,7 @@ RUN_HOUR = int(os.environ.get("LAB_RUN_HOUR", "2"))
 BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
 LOOKAHEAD_PER_DAY = int(os.environ.get("LAB_LOOKAHEAD_PER_DAY", "6"))
 REG = os.path.join(UD, "registry.json")
-BASELINES = os.environ.get("LAB_BASELINES", "/app/baselines")
+BASELINES = os.environ.get("LAB_BASELINES", "/app/baselines-futures" if FUT else "/app/baselines")
 
 def log(*a): print(dt.datetime.utcnow().strftime("%H:%M:%S"), *a, flush=True)
 
@@ -83,7 +92,7 @@ def install_baselines(reg_files):
     for f in sorted(glob.glob(os.path.join(BASELINES, "*.py"))):
         dest = os.path.join(UD, "strategies", os.path.basename(f))
         if os.path.exists(dest): continue
-        shutil.copyfile(f, dest); reg_files[os.path.basename(f)] = "tas-workers:strategy-lab/baselines/" + os.path.basename(f)
+        shutil.copyfile(f, dest); reg_files[os.path.basename(f)] = "tas-workers:strategy-lab/" + ("baselines-futures/" if FUT else "baselines/") + os.path.basename(f)
 
 def record_hashes(reg):
     """Keep the SHA-256 of every strategy file as first seen. A later mismatch means the file changed, which must not happen."""
@@ -119,7 +128,7 @@ def fetch_pinned(reg):
     """Admit each pinned community collection once. A file gets in only if it passes admit() and none of its classes is here already."""
     done = reg.setdefault("pinned_done", []); rejected = reg.setdefault("rejected", {})
     have = set(class_files())
-    for repo, sha, folders, extra in PINNED:
+    for repo, sha, folders, extra in ([] if FUT else PINNED):  # the leverage board has no community collections yet
         key = repo + "@" + sha
         # Done means its files were actually read: a source marked done with nothing admitted and nothing refused is fetched again.
         if key in done and any(v.startswith(key + ":") for v in list(reg["files"].values()) + list(rejected)): continue
@@ -168,7 +177,7 @@ def fetch_sources(reg_files):
             if any(rel.startswith(s) for s in SKIP_DIRS) or "/" in rel and rel.split("/")[0].startswith("__"): continue
             dest = os.path.join(UD, "strategies", os.path.basename(rel))
             if os.path.exists(dest): continue  # frozen: a strategy's code never changes after the day it was added (new files still arrive)
-            open(dest, "wb").write(z.read(n)); reg_files[os.path.basename(rel)] = label + ":" + rel
+            open(dest, "wb").write(z.read(n)); reg_files[os.path.basename(rel)] = label + rel
     open(stamp, "w").write(dt.datetime.utcnow().isoformat())
 
 def list_strategies():
@@ -191,6 +200,49 @@ def parse_last_backtest():
         return json.loads(z.read(name))
     return json.load(open(path))
 
+_PRICES = {}
+
+def hourly_prices(pair):
+    """(time each hourly close became known in ms, close) for one pair, from the candles on disk."""
+    if pair not in _PRICES:
+        import pandas as pd
+        f = os.path.join(UD, "data", "binance", *(["futures"] if FUT else []),
+                         pair.replace("/", "_").replace(":", "_") + ("-1h-futures.feather" if FUT else "-1h.feather"))
+        d = pd.read_feather(f, columns=["date", "close"])
+        known = ((d["date"] - pd.Timestamp("1970-01-01", tz="UTC")) // pd.Timedelta(milliseconds=1)).to_numpy("int64") + 3600000
+        _PRICES[pair] = (known, d["close"].to_numpy("float64"))
+    return _PRICES[pair]
+
+def marked_drawdown(s):
+    """Worst drop of the wallet with open positions valued at each hour's price.
+    Freqtrade's own drawdown only moves when a trade closes, so a bot that sits on a losing position (holding, a grid,
+    a DCA bot, anything with leverage) looks safer than it was. Returns None when it cannot be worked out."""
+    try:
+        import numpy as np
+        hours = np.arange(-(-int(s["backtest_start_ts"]) // 3600000) * 3600000, int(s["backtest_end_ts"]) + 1, 3600000, dtype="int64")
+        if len(hours) < 2: return None
+        eq = np.full(len(hours), float(s.get("starting_balance") or 1000.0))
+        for t in s.get("trades") or []:
+            fills = sorted((o for o in t.get("orders") or [] if o.get("order_filled_timestamp")), key=lambda o: o["order_filled_timestamp"])
+            i0 = int(np.searchsorted(hours, t["open_timestamp"], "left")); i1 = int(np.searchsorted(hours, t["close_timestamp"], "left"))
+            eq[i1:] += float(t.get("profit_abs") or 0.0)  # once closed: the trade's real result, fees and funding included
+            if i1 <= i0 or not fills: continue
+            sign = -1.0 if t.get("is_short") else 1.0
+            ft = np.array([o["order_filled_timestamp"] for o in fills], dtype="int64")
+            amt = np.array([(1.0 if o["ft_is_entry"] else -1.0) * float(o["amount"]) for o in fills])
+            cash = np.array([(-sign if o["ft_is_entry"] else sign) * float(o["amount"]) * float(o["safe_price"]) for o in fills])
+            h = hours[i0:i1]
+            k = np.searchsorted(ft, h, "right") - 1; ok = k >= 0; k = np.clip(k, 0, None)
+            known, close = hourly_prices(t["pair"])
+            pk = np.searchsorted(known, h, "right") - 1; ok &= pk >= 0; pk = np.clip(pk, 0, None)
+            value = sign * np.cumsum(amt)[k] * close[pk] + np.cumsum(cash)[k]
+            if FUT: value = np.maximum(value, -float(t.get("max_stake_amount") or t.get("stake_amount") or 0.0))  # isolated margin: a position cannot lose more than its margin
+            eq[i0:i1] += np.where(ok, value, 0.0)
+        peak = np.maximum.accumulate(eq)
+        return round(float(np.max((peak - eq) / np.where(peak > 0, peak, 1.0))), 6)
+    except Exception as e:
+        log("marked drawdown not worked out:", repr(e)[:200]); return None
+
 def backtest(name, start, tf=None):
     code, out = sh(["freqtrade", "backtesting", "-c", CFG, "--userdir", UD, "--strategy", name,
                     "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"]
@@ -200,14 +252,17 @@ def backtest(name, start, tf=None):
     if code != 0:
         if not tf and "Timeframe needs to be set" in out:  # example strategies that leave the timeframe to the user
             return dict(backtest(name, start, "5m"), timeframe_note="not set by the strategy; run on 5m")
-        if "can_short" in out:  # the lab trades spot, so futures-only strategies are listed but not run
+        if not FUT and "can_short" in out:  # the spot lab lists futures-only strategies but does not run them
             return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
         return {"status": "error", "error": out[-600:]}
     s = parse_last_backtest()["strategy"].get(name, {})
     trades = s.get("trades", [])
-    return {"status": "ok", "timeframe": s.get("timeframe"), "trades": s.get("total_trades", len(trades)),
+    extra = {"leverage": max([t.get("leverage") or 1 for t in trades] or [1]),
+             "liquidations": sum(1 for t in trades if t.get("exit_reason") == "liquidation"),
+             "shorts": sum(1 for t in trades if t.get("is_short")), "funding_fees": round(sum(t.get("funding_fees") or 0 for t in trades), 4)} if FUT else {}
+    return {**extra, "status": "ok", "timeframe": s.get("timeframe"), "trades": s.get("total_trades", len(trades)),
             "profit_total": s.get("profit_total"), "profit_abs": s.get("profit_total_abs"),
-            "max_drawdown": s.get("max_drawdown_account", s.get("max_relative_drawdown")),
+            "max_drawdown": s.get("max_drawdown_account", s.get("max_relative_drawdown")), "max_drawdown_marked": marked_drawdown(s),
             "winrate": s.get("winrate"), "wins": s.get("wins"), "losses": s.get("losses"),
             "market_change": s.get("market_change"), "start": s.get("backtest_start"), "end": s.get("backtest_end")}
 
@@ -215,7 +270,7 @@ def lookahead(name, start):
     out_csv = "/tmp/lookahead.csv"
     if os.path.exists(out_csv): os.remove(out_csv)
     code, out = sh(["freqtrade", "lookahead-analysis", "-c", CFG, "--userdir", UD, "--strategy", name,
-                    "--timerange", start.strftime("%Y%m%d") + "-", "-p", "BTC/USDT", "ETH/USDT", "SOL/USDT",
+                    "--timerange", start.strftime("%Y%m%d") + "-", "-p", *LA_PAIRS,
                     "--lookahead-analysis-exportfilename", out_csv], BT_TIMEOUT)
     if os.path.exists(out_csv):
         for row in csv.DictReader(open(out_csv)):
@@ -288,7 +343,7 @@ def run_once():
                "lookahead_flagged": sum(r.get("lookahead_bias") is True for r in results),
                "lookahead_checked": sum(r.get("lookahead_bias") is not None for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
-               "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Spot only: no leverage, no shorting. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Community collections are pinned to one commit, and a file is admitted only if a read of its code shows it imports nothing but the libraries a strategy needs. A strategy that cannot finish three runs in a row is retired. Strategies flagged by Freqtrade's lookahead analysis are marked."}
+               "mode": MODE, "method": ("Leverage board. Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance USDT perpetual futures, 20 pairs, isolated margin, $1,000 paper wallet, 5 open trades, exchange fees and funding fees included, liquidations as the exchange's published margin tiers would trigger them. Shorting is allowed. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Never ranked together with the spot Strategy Lab." if FUT else "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Spot only: no leverage, no shorting. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Community collections are pinned to one commit, and a file is admitted only if a read of its code shows it imports nothing but the libraries a strategy needs. A strategy that cannot finish three runs in a row is retired. Strategies flagged by Freqtrade's lookahead analysis are marked.")}
     save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
     save_json(os.path.join(PUB, "not-admitted.json"), {"as_of": str(today), "about": "Files from the pinned community collections that were read and not admitted, with the reason.", "files": reg.get("rejected", {})})
     save_json(os.path.join(PUB, "status.json"), summary)
