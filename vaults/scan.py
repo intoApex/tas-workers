@@ -206,8 +206,88 @@ def lagoon():
                      "description": (dd.get("shortDescription") or dd.get("description") or "")[:300]})
     return {"vaults": listed, "details": details}, rows
 
+# On-chain strategy vaults (ERC-4626), read straight from the chain through public RPC endpoints.
+# The list (vaults/onchain_vaults.json) is the trading-type vaults tagged in Trading Strategy's open-source
+# web3-ethereum-defi (MIT), with the sources it cites.
+RPC = {1: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
+       8453: ["https://base-rpc.publicnode.com", "https://mainnet.base.org"],
+       42161: ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"],
+       56: ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.bnbchain.org"],
+       10: ["https://optimism-rpc.publicnode.com"], 137: ["https://polygon-bor-rpc.publicnode.com"],
+       43114: ["https://avalanche-c-chain-rpc.publicnode.com"], 999: ["https://rpc.hyperliquid.xyz/evm"]}
+LLAMA_CHAIN = {1: "ethereum", 8453: "base", 42161: "arbitrum", 56: "bsc", 10: "optimism", 137: "polygon", 43114: "avax", 999: "hyperliquid"}
+EXPLORER = {1: "https://etherscan.io/address/", 8453: "https://basescan.org/address/", 42161: "https://arbiscan.io/address/",
+            56: "https://bscscan.com/address/", 10: "https://optimistic.etherscan.io/address/", 137: "https://polygonscan.com/address/",
+            43114: "https://snowtrace.io/address/", 999: "https://hyperevmscan.io/address/"}
+CHAIN_NAME = {1: "Ethereum", 8453: "Base", 42161: "Arbitrum", 56: "BNB Chain", 10: "Optimism", 137: "Polygon", 43114: "Avalanche", 999: "HyperEVM"}
+
+def eth_call(chain, to, data):
+    last = None
+    for url in RPC.get(chain, []):
+        try:
+            r = get(url, {"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": to, "data": data}, "latest"]})
+            if r.get("result") not in (None, "0x"):
+                return r["result"]
+            last = r.get("error") or "empty result"
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"eth_call failed on chain {chain}: {str(last)[:80]}")
+
+def _uint(h):
+    return int(h[2:66], 16)
+
+def _string(h):
+    b = bytes.fromhex(h[2:])
+    if len(b) >= 96:
+        n = int.from_bytes(b[32:64], "big")
+        return b[64:64 + n].decode("utf-8", "ignore")
+    return b.rstrip(b"\0").decode("utf-8", "ignore")
+
+def onchain():
+    here = os.path.dirname(os.path.abspath(__file__))
+    lst = json.load(open(os.path.join(here, "onchain_vaults.json")))["vaults"]
+    rows, raw, assets = [], [], {}
+    for v in lst:
+        ch, a = int(v["chain_id"]), v["address"].lower()
+        try:
+            asset = "0x" + eth_call(ch, a, "0x38d52e0f")[-40:]
+            vdec = _uint(eth_call(ch, a, "0x313ce567"))
+            if asset not in assets:
+                assets[asset] = {"decimals": _uint(eth_call(ch, asset, "0x313ce567")), "symbol": _string(eth_call(ch, asset, "0x95d89b41"))}
+            adec = assets[asset]["decimals"]
+            per_share = _uint(eth_call(ch, a, "0x07a2d13a" + format(10 ** vdec, "064x")))
+            total = _uint(eth_call(ch, a, "0x01e1d114"))
+        except Exception as e:
+            raw.append({**v, "error": str(e)[:160]})
+            continue
+        rec = {**v, "asset": asset, "asset_symbol": assets[asset]["symbol"], "share_price": per_share / 10 ** adec, "total_assets": total / 10 ** adec}
+        raw.append(rec)
+        time.sleep(0.2)
+    # USD prices for the vaults' assets, from DefiLlama's public price API
+    keys = sorted({f"{LLAMA_CHAIN[int(r['chain_id'])]}:{r['asset']}" for r in raw if r.get("asset") and int(r["chain_id"]) in LLAMA_CHAIN})
+    prices = {}
+    for i in range(0, len(keys), 40):
+        try:
+            prices.update((get("https://coins.llama.fi/prices/current/" + ",".join(keys[i:i + 40])).get("coins") or {}))
+        except Exception:
+            pass
+    for r in raw:
+        if r.get("error"):
+            continue
+        ch = int(r["chain_id"])
+        px = (prices.get(f"{LLAMA_CHAIN.get(ch)}:{r['asset']}") or {}).get("price")
+        rows.append({"id": f"{ch}:{r['address']}", "name": r["name"], "manager": None, "platform": r["protocol"].replace("_", " ").title(),
+                     "kind": r["protocol"].replace("_", " ").title() + ": " + ", ".join(t.replace("_", " ") for t in r["tags"][:4]),
+                     "chain": CHAIN_NAME.get(ch), "asset": r["asset_symbol"], "address": r["address"],
+                     "url": EXPLORER.get(ch, "") + r["address"] if ch in EXPLORER else (r.get("sources") or [None])[0], "sources": r.get("sources"),
+                     "tvl_usd": r["total_assets"] * px if px else None, "share_price": r["share_price"]})
+    if not rows:
+        raise RuntimeError(f"no vault could be read ({len(raw)} tried)")
+    return {"vaults": raw, "prices": prices}, rows
+
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
-          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000)}
+          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000),
+          "onchain": (onchain, 50_000)}
 
 # ---------- shared: save, history, record, publish ----------
 

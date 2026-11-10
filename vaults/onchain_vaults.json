@@ -1,0 +1,486 @@
+{
+ "source": "Strategy tags and sources from Trading Strategy's web3-ethereum-defi (MIT licence, Copyright 2022-2026 Market Software Ltd), eth_defi/erc_4626/vault_protocol/*/tags.py; trading-type tags only; Lagoon vaults are read from Lagoon's own API instead.",
+ "vaults": [
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x05ed3da1deeaaa57c8e09986e95ac271572dcf89",
+   "name": "Vectis UltraX Arb",
+   "tags": [
+    "algorithmic_trading",
+    "arbitrage",
+    "delta_neutral",
+    "funding_rate_arbitrage",
+    "perpetual_futures"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/608280921",
+    "https://docs.vectis.finance/vaults/ultrax-arb-vault-v2-eth",
+    "https://tradingstrategy.ai/vaults/vectis-ultrax-arb"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x2b5895b716311a1eac8f93fb88c56af9ec8c1a69",
+   "name": "JUSD Credit Vault",
+   "tags": [
+    "arbitrage",
+    "delta_neutral",
+    "funding_rate_arbitrage",
+    "lending",
+    "multistrategy",
+    "perpetual_futures"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/605251425"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0xb9c317cae7dd05ecb0c0925020e529934c96f84d",
+   "name": "OnRe Core Vault",
+   "tags": [
+    "carry_trade",
+    "lending",
+    "lending_looping",
+    "multistrategy",
+    "rwa"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/605211240"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x99351baed3d8ab544ccb08af96a105910fda71e7",
+   "name": "Morini FXArbUSDTRY",
+   "tags": [
+    "arbitrage",
+    "carry_trade",
+    "delta_neutral",
+    "fx",
+    "market_making"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/605201359"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x909dadbca7955614a455d9e7447ad4adb4902c8e",
+   "name": "Neutral Trade Autopilot",
+   "tags": [
+    "algorithmic_trading",
+    "arbitrage",
+    "delta_neutral",
+    "directional_trading",
+    "funding_rate_arbitrage",
+    "market_making",
+    "multistrategy",
+    "options",
+    "perpetual_futures",
+    "trend_following"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/608250934"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x438d84e451decd8d4b12eadd7d186ca0bda947e7",
+   "name": "Agra USPC Liquidity Vault",
+   "tags": [
+    "lending",
+    "liquidity_provider",
+    "market_making"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/606172323"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x934a801d516ef34c519c793fe0606570e732fc6d",
+   "name": "BIMA WBTC/USDC OCT26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610021271"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x5164363574b0136d60479f0a5a33cf49871f3bb4",
+   "name": "BIMA WBTC/USDC OCTNOV26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610051081"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0xe9e54004556b9b55c59a36294688ff7081671944",
+   "name": "BIMA WBTC/USDC NOVDEC26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211251"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 1,
+   "address": "0x0434d3b6e6c0a53c04fbb2d3d2a5cc61316cbb75",
+   "name": "BIMA WBTC/USDC NOV26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211260"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 56,
+   "address": "0xe1f7c0b46c02374ef9a77e40a6cec31ca5a15313",
+   "name": "BIMA WBNB/USDC OCTNOV26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610051025"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 56,
+   "address": "0x0e51a7f836f0cf058a0f13160e21eee38ab221c0",
+   "name": "BIMA WBNB/USDC OCT26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610021254"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 56,
+   "address": "0x40591d6ec4e7013e39b7e10fc02caace79fc6e98",
+   "name": "BIMA WBNB/USDC NOV26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211317"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 56,
+   "address": "0x8c6b6a1cb41b618bc2efe2539efa9830d8b2242b",
+   "name": "BIMA WBNB/USDC NOVDEC26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211419"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 8453,
+   "address": "0xe4ee0fe4b09021fcdf76b165aa1e8eaf7d447c35",
+   "name": "BIMA cbBTC/USDC OCT26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610021318"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 8453,
+   "address": "0xee381a87bd54796f471f79cea87132f2869dc37c",
+   "name": "BIMA CBBTC/USDC OCTNOV26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610051085"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 8453,
+   "address": "0x67e9faebcd6429817653ff5391f26325ea0714be",
+   "name": "BIMA cbBTC/USDC NOV26-27",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211347"
+   ]
+  },
+  {
+   "protocol": "accountable",
+   "chain_id": 8453,
+   "address": "0x37153aac7cac0c9e9c0fa2b8e7abb371cbfe70d8",
+   "name": "BIMA CBBTC/USDC NOVDEC26",
+   "tags": [
+    "options"
+   ],
+   "sources": [
+    "https://yield.accountable.capital/api/loan/610211355"
+   ]
+  },
+  {
+   "protocol": "atoma",
+   "chain_id": 42161,
+   "address": "0xcc56410e1a136af0eceb7241c6ae394f4d8b581c",
+   "name": "Atoma Index",
+   "tags": [
+    "delta_neutral",
+    "funding_rate_arbitrage",
+    "perpetual_futures"
+   ],
+   "sources": [
+    "https://atoma.fi/",
+    "https://arbiscan.io/address/0xCC56410e1a136aF0eCEb7241c6aE394F4d8b581c"
+   ]
+  },
+  {
+   "protocol": "atoma",
+   "chain_id": 42161,
+   "address": "0x1c788e14d8e5b446e3f71b5142e2edabcab36da1",
+   "name": "Atoma RWA",
+   "tags": [
+    "delta_neutral",
+    "funding_rate_arbitrage",
+    "multistrategy",
+    "perpetual_futures",
+    "rwa",
+    "statistical_arbitrage"
+   ],
+   "sources": [
+    "https://app.atoma.fi/atoma-index",
+    "https://arbiscan.io/address/0x1C788E14d8e5B446e3F71B5142e2edaBcAB36da1"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 1,
+   "address": "0x1abd0403591be494771115d74ed9e120530f356e",
+   "name": "Anchorage/AUTOfinance anchrgUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 1,
+   "address": "0x2916dfb3324377645cac4c5e78dffce910a61393",
+   "name": "AUTOfinance gpuUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 1,
+   "address": "0x408b6a3e2daf288864968454aae786a2a042df36",
+   "name": "Tokemak siloUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 1,
+   "address": "0xa7569a44f348d3d70d8ad5889e50f78e33d80d35",
+   "name": "Tokemak autoUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 1,
+   "address": "0xc7d7f434c015f2a7e77df9763ade300f2171a05a",
+   "name": "AUTOfinance infinifiUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 42161,
+   "address": "0xf63b7f49b4f5dc5d0e7e583cfd79dc64e646320c",
+   "name": "Tokemak arbUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "autopool",
+   "chain_id": 8453,
+   "address": "0x9c6864105aec23388c89600046213a44c384c831",
+   "name": "Tokemak baseUSD",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics",
+    "https://docs.auto.finance/auto-pools-protocol/protocol-mechanics/components-and-logic"
+   ]
+  },
+  {
+   "protocol": "ember",
+   "chain_id": 1,
+   "address": "0xf3190a3ecc109f88e7947b849b281918c798a0c4",
+   "name": "Ember Third Eye",
+   "tags": [
+    "arbitrage",
+    "carry_trade",
+    "delta_neutral",
+    "multistrategy"
+   ],
+   "sources": [
+    "https://vaults.api.sui-prod.bluefin.io/api/v2/vaults?chain=ethereum"
+   ]
+  },
+  {
+   "protocol": "ember",
+   "chain_id": 1,
+   "address": "0x9be9294722f8aad37b11a9792be2c782182cafa2",
+   "name": "Ember Earn",
+   "tags": [
+    "carry_trade",
+    "lending",
+    "liquidity_provider",
+    "multistrategy"
+   ],
+   "sources": [
+    "https://vaults.api.sui-prod.bluefin.io/api/v2/vaults?chain=ethereum"
+   ]
+  },
+  {
+   "protocol": "ethena",
+   "chain_id": 1,
+   "address": "0x9d39a5de30e57443bff2a8307a4256c8797a3497",
+   "name": "Staked USDe",
+   "tags": [
+    "algorithmic_trading",
+    "carry_trade",
+    "delta_neutral",
+    "funding_rate_arbitrage",
+    "perpetual_futures"
+   ],
+   "sources": [
+    "https://tradingstrategy.ai/vaults/staked-usde-3",
+    "https://docs.ethena.fi/how-usde-works",
+    "https://docs.ethena.fi/solution-design/staking-usde",
+    "https://etherscan.io/address/0x9d39a5de30e57443bff2a8307a4256c8797a3497"
+   ]
+  },
+  {
+   "protocol": "panoptic",
+   "chain_id": 8453,
+   "address": "0xabbad7a755bdf9bbec357e2bdf4c02934a8d7a71",
+   "name": "POPT-V1.1 USDC LP on ETH/USDC 5bps",
+   "tags": [
+    "amm",
+    "liquidity_provider",
+    "market_making",
+    "market_making_amm"
+   ],
+   "sources": [
+    "https://tradingstrategy.ai/vaults/popt-v1-1-usdc-lp-on-eth-usdc-5bps-2",
+    "https://panoptic.xyz/docs/intro",
+    "https://app.panoptic.xyz/markets",
+    "https://basescan.org/address/0xabbad7a755bdf9bbec357e2bdf4c02934a8d7a71"
+   ]
+  },
+  {
+   "protocol": "plutus",
+   "chain_id": 42161,
+   "address": "0x58bfc95a864e18e8f3041d2fcd3418f48393fe6a",
+   "name": "Plutus Hedge Token",
+   "tags": [
+    "algorithmic_trading",
+    "multistrategy"
+   ],
+   "sources": [
+    "https://docs.plutus.fi/products/plvassets",
+    "https://docs.plutus.fi/products/plvassets/plvdolo.md",
+    "https://docs.plutus.fi/products/plvassets/plvhedge.md"
+   ]
+  },
+  {
+   "protocol": "plutus",
+   "chain_id": 42161,
+   "address": "0xf84eaa0685626f84fe17bc6c3c9eb2ac8a90d3c1",
+   "name": "Plutus Dolomite vault",
+   "tags": [
+    "algorithmic_trading"
+   ],
+   "sources": [
+    "https://docs.plutus.fi/products/plvassets",
+    "https://docs.plutus.fi/products/plvassets/plvdolo.md",
+    "https://docs.plutus.fi/products/plvassets/plvhedge.md"
+   ]
+  },
+  {
+   "protocol": "veranta",
+   "chain_id": 8453,
+   "address": "0x944766f715b51967e56afde5f0aa76ceacc9e7f9",
+   "name": "Avantis USDC Vault",
+   "tags": [
+    "liquidity_provider",
+    "market_making",
+    "perpetual_futures"
+   ],
+   "sources": [
+    "https://docs.veranta.xyz/liquidity-providers/veranta-lp-vault-avusdc",
+    "https://basescan.org/address/0x944766f715b51967e56afde5f0aa76ceacc9e7f9"
+   ]
+  }
+ ]
+}
