@@ -156,13 +156,14 @@ def hibachi():
         iv = p.get("vaultPerformanceIntervals") or []
         perf[str(vid)] = iv
         last = max(iv, key=lambda x: x.get("timestamp") or 0) if iv else {}
-        rows.append({"id": str(vid), "name": v.get("shortDescription") or v.get("symbol"), "manager": None, "kind": v.get("vaultType"),
+        rows.append({"id": str(vid), "name": v.get("shortDescription") or v.get("symbol"), "manager": None, "kind": None,
                      "symbol": v.get("symbol"), "url": "https://hibachi.xyz/vaults",
                      "tvl_usd": num(last.get("totalValueLocked")) or ((num(v.get("perSharePrice")) or 0) * (num(v.get("outstandingShares")) or 0)),
                      "share_price": num(v.get("perSharePrice")),
                      # Hibachi publishes fees as fractions (0.1 = 10%)
                      "fees_pct": {k: (x * 100 if x is not None and x <= 1 else x) for k, x in (("management", num(v.get("managementFees"))), ("performance", num(v.get("performanceFees"))))},
-                     "venue_reported": {"max_drawdown": num(v.get("maxDrawdown")), "sharpe": num(v.get("sharpeRatio"))},
+                     # Hibachi returns 0 for both when it hasn't computed them, so only non-zero values are kept
+                     "venue_reported": {k: x for k, x in (("max_drawdown", num(v.get("maxDrawdown"))), ("sharpe", num(v.get("sharpeRatio")))) if x},
                      "venue_history": daily([(int(x["timestamp"]), num(x.get("perSharePrice"))) for x in iv if x.get("timestamp")]),
                      "description": (v.get("description") or "")[:300]})
     return {"vaults": vs, "performance": perf}, rows
@@ -183,7 +184,11 @@ def lagoon():
     for v in listed:
         st = v.get("state") or {}
         tvl = num(st.get("totalAssetsUsd"))
-        if not v.get("isVisible") or (tvl or 0) < 100_000:
+        if not v.get("isVisible"):
+            continue
+        if (tvl or 0) < 100_000:
+            # counted as listed, not looked up: it can't reach the page anyway
+            rows.append({"id": f"{(v.get('chain') or {}).get('id')}:{(v.get('address') or '').lower()}", "name": v.get("name"), "tvl_usd": tvl, "share_price": None})
             continue
         ch = (v.get("chain") or {}).get("id"); addr = (v.get("address") or "").lower()
         time.sleep(0.4)
@@ -195,7 +200,8 @@ def lagoon():
         dec = int(((dd.get("asset") or {}).get("decimals")) or 18)
         pps = num(s2.get("pricePerShare"))
         cur = ", ".join(c.get("name") for c in (dd.get("curators") or v.get("curators") or []) if c.get("name"))
-        apr = lambda k: num(((s2.get(k) or {}).get("linearNetAprWithoutExtraYields")))
+        # Lagoon reports APR in percent (2.6 = 2.6%); we store fractions like every other venue
+        apr = lambda k: (lambda x: x / 100 if x is not None else None)(num(((s2.get(k) or {}).get("linearNetAprWithoutExtraYields"))))
         rows.append({"id": f"{ch}:{addr}", "name": v.get("name"), "manager": cur or None,
                      "kind": (v.get("strategyCategory") or {}).get("label"), "chain": (v.get("chain") or {}).get("name"),
                      "asset": (v.get("asset") or {}).get("symbol"), "address": addr,
@@ -274,7 +280,7 @@ def run(venue, fn, min_tvl, today):
             keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": "our daily snapshots"})
     keep.sort(key=lambda r: -(r["tvl_usd"] or 0))
     os.makedirs(PUB, exist_ok=True)
-    doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "vaults": keep,
+    doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "rates_as": "fraction", "vaults": keep,
            "note": "venue_reported figures are the venue's own; *_tracked figures are computed by TradingAgentStack, from the venue's published share-price history where it has one (computed_from) and otherwise from daily share prices we saved ourselves."}
     tmp = os.path.join(PUB, f"{venue}.json.tmp")
     with open(tmp, "w") as fh:
