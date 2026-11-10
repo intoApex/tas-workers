@@ -3,9 +3,12 @@
 Each strategy is scored only on candles from after the day it was added here (out of sample), with
 Binance spot fees, the same 20 pairs, $1,000 paper wallet and 5 open trades for every strategy.
 Strategies are checked once with Freqtrade's lookahead analysis; any that peek at future candles are flagged.
+A strategy's file is frozen on the day it is added: it is never replaced afterwards, and its SHA-256 is kept in the
+registry and published with its result, so a record always belongs to the code that produced it.
+Our own baselines (hold, moving-average cross, dip buying, breakout and a coin-flip control) live in baselines/.
 Raw data stays on the server; /public/strategy-lab/results.json holds the per-strategy results.
 """
-import csv, datetime as dt, glob, io, json, os, re, shutil, subprocess, time, urllib.request, zipfile
+import csv, datetime as dt, glob, hashlib, io, json, os, re, shutil, subprocess, time, urllib.request, zipfile
 
 UD = "/freqtrade/user_data"; CFG = "/app/config.json"; PUB = "/public/strategy-lab"
 SOURCES = [  # (label, zip url, path prefix inside the zip that holds strategies)
@@ -17,6 +20,7 @@ RUN_HOUR = int(os.environ.get("LAB_RUN_HOUR", "2"))
 BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
 LOOKAHEAD_PER_DAY = int(os.environ.get("LAB_LOOKAHEAD_PER_DAY", "6"))
 REG = os.path.join(UD, "registry.json")
+BASELINES = os.environ.get("LAB_BASELINES", "/app/baselines")
 
 def log(*a): print(dt.datetime.utcnow().strftime("%H:%M:%S"), *a, flush=True)
 
@@ -35,6 +39,26 @@ def save_json(path, obj):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"; json.dump(obj, open(tmp, "w"), indent=1); os.replace(tmp, path)
 
+def sha256(path):
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()
+
+def install_baselines(reg_files):
+    """Copy our own baseline strategies in once. Like every other strategy, a file that is already there is never replaced."""
+    os.makedirs(os.path.join(UD, "strategies"), exist_ok=True)
+    for f in sorted(glob.glob(os.path.join(BASELINES, "*.py"))):
+        dest = os.path.join(UD, "strategies", os.path.basename(f))
+        if os.path.exists(dest): continue
+        shutil.copyfile(f, dest); reg_files[os.path.basename(f)] = "tas-workers:strategy-lab/baselines/" + os.path.basename(f)
+
+def record_hashes(reg):
+    """Keep the SHA-256 of every strategy file as first seen. A later mismatch means the file changed, which must not happen."""
+    hashes = reg.setdefault("sha256", {})
+    for f in glob.glob(os.path.join(UD, "strategies", "*.py")):
+        b = os.path.basename(f); h = sha256(f)
+        if b not in hashes: hashes[b] = h
+        elif hashes[b] != h: log("WARNING: strategy file changed since it was added:", b)
+    return hashes
+
 def fetch_sources(reg_files):
     os.makedirs(os.path.join(UD, "strategies"), exist_ok=True)
     stamp = os.path.join(UD, ".sources_at")
@@ -48,7 +72,7 @@ def fetch_sources(reg_files):
             rel = n[len(prefix):]
             if any(rel.startswith(s) for s in SKIP_DIRS) or "/" in rel and rel.split("/")[0].startswith("__"): continue
             dest = os.path.join(UD, "strategies", os.path.basename(rel))
-            if os.path.exists(dest) and reg_files.get(os.path.basename(rel)) not in (None, label + ":" + rel): continue
+            if os.path.exists(dest): continue  # frozen: a strategy's code never changes after the day it was added (new files still arrive)
             open(dest, "wb").write(z.read(n)); reg_files[os.path.basename(rel)] = label + ":" + rel
     open(stamp, "w").write(dt.datetime.utcnow().isoformat())
 
@@ -107,7 +131,9 @@ def lookahead(name, start):
 def run_once():
     t0 = time.time(); today = dt.datetime.utcnow().date()
     reg = load_reg(); reg.setdefault("files", {}); reg.setdefault("strategies", {})
+    install_baselines(reg["files"])
     fetch_sources(reg["files"])
+    hashes = record_hashes(reg)
     names, list_err = list_strategies()
     if not names: raise RuntimeError("no strategies loaded: " + (list_err or "")[-400:])
     cf = class_files()
@@ -125,7 +151,8 @@ def run_once():
     results = []
     for n, meta in sorted(reg["strategies"].items()):
         added = dt.date.fromisoformat(meta["added"]); days = (today - added).days
-        r = {"strategy": n, "source": meta.get("source"), "added": meta["added"], "days_live": days, "lookahead_bias": meta.get("lookahead_bias")}
+        r = {"strategy": n, "source": meta.get("source"), "added": meta["added"], "days_live": days, "lookahead_bias": meta.get("lookahead_bias"),
+             "code_sha256": hashes.get(meta.get("file") or "")}
         if n not in names: r.update(status="not_loadable")
         else:
             # Labelled backtest on the last 45 days (published at once, never called a track record),
@@ -142,7 +169,7 @@ def run_once():
                "errors": sum(r.get("status") == "error" for r in results), "lookahead_flagged": sum(r.get("lookahead_bias") is True for r in results),
                "lookahead_checked": sum(r.get("lookahead_bias") is not None for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
-               "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Strategies flagged by Freqtrade's lookahead analysis are marked."}
+               "method": "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Spot only: no leverage, no shorting. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Strategies flagged by Freqtrade's lookahead analysis are marked."}
     save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
     save_json(os.path.join(PUB, "status.json"), summary)
     open(os.path.join(UD, ".last_run_v4"), "w").write(str(today))

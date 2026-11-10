@@ -31,7 +31,7 @@ services:
       LAB_RUN_HOUR: "2"
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "6"
-      LAB_CODE_REV: "4"  # bump to restart the lab with new code (the code is read once at start)
+      LAB_CODE_REV: "5"  # bump to restart the lab with new code (the code is read once at start)
     mem_limit: 2g
     cpus: 1.5
     logging:
