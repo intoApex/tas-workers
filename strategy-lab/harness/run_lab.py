@@ -28,7 +28,7 @@ def _fake(req, timeout=0):
     if "tas-test/pinned-a" in url:  # the official collection's URL gets an empty archive
         base = os.path.join(here, "testrepo")
         for dp, dn, fn in os.walk(base):
-            for f in fn: z.write(os.path.join(dp, f), "pinned-a-" + SHA + "/" + os.path.relpath(os.path.join(dp, f), base))
+            for f in fn: z.write(os.path.join(dp, f), os.environ.get("TOP", "pinned-a-" + SHA) + "/" + os.path.relpath(os.path.join(dp, f), base))
     z.close(); return _Resp(buf.getvalue())
 urllib.request.urlopen = _fake
 os.makedirs(lab.PUB, exist_ok=True)

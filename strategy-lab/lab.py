@@ -121,18 +121,20 @@ def fetch_pinned(reg):
     have = set(class_files())
     for repo, sha, folders, extra in PINNED:
         key = repo + "@" + sha
-        if key in done: continue
+        # Done means its files were actually read: a source marked done with nothing admitted and nothing refused is fetched again.
+        if key in done and any(v.startswith(key + ":") for v in list(reg["files"].values()) + list(rejected)): continue
         try:
             req = urllib.request.Request(f"https://codeload.github.com/{repo}/zip/{sha}", headers={"User-Agent": "TradingAgentStack-strategy-lab/1.0"})
             z = zipfile.ZipFile(io.BytesIO(urllib.request.urlopen(req, timeout=120).read()))
         except Exception as e:
             log("pinned source not fetched, will retry next run:", key, repr(e)[:200]); continue
-        prefix = repo.split("/")[1] + "-" + sha + "/"; added = 0
-        for n in sorted(z.namelist()):
+        names = z.namelist(); added = seen = 0
+        prefix = names[0].split("/")[0] + "/" if names else ""  # the archive's own top folder, whatever GitHub names it
+        for n in sorted(names):
             if not n.startswith(prefix) or not n.endswith(".py"): continue
             rel = n[len(prefix):]
             if not any(rel.startswith(f) for f in folders) or any(w in rel.lower() for w in PINNED_SKIP): continue
-            raw = z.read(n)
+            seen += 1; raw = z.read(n)
             if b"IStrategy" not in raw: continue
             label = key + ":" + rel
             why, classes = admit(raw.decode("utf-8", "replace"), extra)
@@ -142,7 +144,10 @@ def fetch_pinned(reg):
             dest = os.path.join(UD, "strategies", name)
             if os.path.exists(dest): continue
             open(dest, "wb").write(raw); reg["files"][name] = label; have |= set(classes); added += 1
-        done.append(key); log("pinned source", key, "admitted", added)
+        if not seen:
+            log("pinned source had no files in the listed folders, will retry next run:", key); continue
+        if key not in done: done.append(key)
+        log("pinned source", key, "files read", seen, "admitted", added)
 
 def strike(meta, why):
     meta["strikes"] = meta.get("strikes", 0) + 1
