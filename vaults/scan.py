@@ -389,7 +389,12 @@ def metric():
 
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
           "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000), "metric": (metric, 50_000),
-          "onchain": (onchain, 50_000), "d2": (d2, 10_000)}
+          "onchain": (onchain, 50_000)}
+# D2 Finance is not in the daily run (2026-11-11). d2.finance puts a Cloudflare "verify you are human" page in front of the
+# whole site, the API and robots.txt included, so this server gets HTTP 403 every day. We do not get past bot checks, so
+# d2() stays here unused until D2 gives the scanner a way in (an allowlisted address or a data host without the check),
+# or the vaults are read from the chain like the ones in onchain(). To put it back: add "d2": (d2, 10_000) above.
+PAUSED = {"d2": "the venue's site answers every automated request with a bot check (HTTP 403)"}
 
 # ---------- shared: save, history, record, publish ----------
 
@@ -495,7 +500,7 @@ def main():
         time.sleep(2)
     os.makedirs(PUB, exist_ok=True)
     with open(os.path.join(PUB, "status.json"), "w") as fh:
-        json.dump({"at": dt.datetime.utcnow().isoformat() + "Z", "venues": status}, fh)
+        json.dump({"at": dt.datetime.utcnow().isoformat() + "Z", "venues": status, "paused": PAUSED}, fh)
     return 1 if bad == len(only) else 0
 
 if __name__ == "__main__":
