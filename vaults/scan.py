@@ -91,7 +91,19 @@ def paradex():
                      "venue_reported": {"return_30d": num(s.get("roi_30d")), "return_total": num(s.get("total_roi")),
                                         "max_drawdown": (-num(s.get("max_drawdown"))) if num(s.get("max_drawdown")) is not None else None},
                      "description": (m.get("strategy_description") or m.get("description") or "")[:300]})
-    return {"vaults": meta, "summary": summ}, rows
+    # Paradex publishes each vault's share price since launch (public, no key), so big vaults get their whole record
+    hist_raw = {}
+    for r in rows:
+        if (r.get("tvl_usd") or 0) < 10_000:
+            continue
+        time.sleep(0.5)
+        try:
+            h = (get(f"https://api.prod.paradex.trade/v1/vaults/history?address={r['id']}&type=price&resolution=alltime").get("results") or [{}])[0]
+            hist_raw[r["id"]] = h
+            r["venue_history"] = daily([(int(t) // 1000, num(x)) for t, x in zip(h.get("timestamps") or [], h.get("data") or [])])
+        except Exception as e:
+            r["history_error"] = str(e)[:120]
+    return {"vaults": meta, "summary": summ, "history": hist_raw}, rows
 
 def orderly():
     d = get("https://api-sv.orderly.org/v1/public/strategy_vault/vault/info")
@@ -170,13 +182,14 @@ def hibachi():
         iv = p.get("vaultPerformanceIntervals") or []
         perf[str(vid)] = iv
         last = max(iv, key=lambda x: x.get("timestamp") or 0) if iv else {}
-        rows.append({"id": str(vid), "name": v.get("shortDescription") or v.get("symbol"), "manager": None, "kind": v.get("vaultType"),
+        rows.append({"id": str(vid), "name": v.get("shortDescription") or v.get("symbol"), "manager": None, "kind": None,
                      "symbol": v.get("symbol"), "url": "https://hibachi.xyz/vaults",
                      "tvl_usd": num(last.get("totalValueLocked")) or ((num(v.get("perSharePrice")) or 0) * (num(v.get("outstandingShares")) or 0)),
                      "share_price": num(v.get("perSharePrice")),
                      # Hibachi publishes fees as fractions (0.1 = 10%)
                      "fees_pct": {k: (x * 100 if x is not None and x <= 1 else x) for k, x in (("management", num(v.get("managementFees"))), ("performance", num(v.get("performanceFees"))))},
-                     "venue_reported": {"max_drawdown": num(v.get("maxDrawdown")), "sharpe": num(v.get("sharpeRatio"))},
+                     # Hibachi returns 0 for both when it hasn't computed them, so only non-zero values are kept
+                     "venue_reported": {k: x for k, x in (("max_drawdown", num(v.get("maxDrawdown"))), ("sharpe", num(v.get("sharpeRatio")))) if x},
                      "venue_history": daily([(int(x["timestamp"]), num(x.get("perSharePrice"))) for x in iv if x.get("timestamp")]),
                      "description": (v.get("description") or "")[:300]})
     return {"vaults": vs, "performance": perf}, rows
@@ -197,7 +210,11 @@ def lagoon():
     for v in listed:
         st = v.get("state") or {}
         tvl = num(st.get("totalAssetsUsd"))
-        if not v.get("isVisible") or (tvl or 0) < 100_000:
+        if not v.get("isVisible"):
+            continue
+        if (tvl or 0) < 100_000:
+            # counted as listed, not looked up: it can't reach the page anyway
+            rows.append({"id": f"{(v.get('chain') or {}).get('id')}:{(v.get('address') or '').lower()}", "name": v.get("name"), "tvl_usd": tvl, "share_price": None})
             continue
         ch = (v.get("chain") or {}).get("id"); addr = (v.get("address") or "").lower()
         time.sleep(0.4)
@@ -209,7 +226,8 @@ def lagoon():
         dec = int(((dd.get("asset") or {}).get("decimals")) or 18)
         pps = num(s2.get("pricePerShare"))
         cur = ", ".join(c.get("name") for c in (dd.get("curators") or v.get("curators") or []) if c.get("name"))
-        apr = lambda k: num(((s2.get(k) or {}).get("linearNetAprWithoutExtraYields")))
+        # Lagoon reports APR in percent (2.6 = 2.6%); we store fractions like every other venue
+        apr = lambda k: (lambda x: x / 100 if x is not None else None)(num(((s2.get(k) or {}).get("linearNetAprWithoutExtraYields"))))
         rows.append({"id": f"{ch}:{addr}", "name": v.get("name"), "manager": cur or None,
                      "kind": (v.get("strategyCategory") or {}).get("label"), "chain": (v.get("chain") or {}).get("name"),
                      "asset": (v.get("asset") or {}).get("symbol"), "address": addr,
@@ -219,6 +237,112 @@ def lagoon():
                      "venue_reported": {"apr_7d": apr("weeklyApr"), "apr_30d": apr("monthlyApr"), "apr_inception": apr("inceptionApr")},
                      "description": (dd.get("shortDescription") or dd.get("description") or "")[:300]})
     return {"vaults": listed, "details": details}, rows
+
+# On-chain strategy vaults (ERC-4626), read straight from the chain through public RPC endpoints.
+# The list (vaults/onchain_vaults.json) is the trading-type vaults tagged in Trading Strategy's open-source
+# web3-ethereum-defi (MIT), with the sources it cites.
+RPC = {1: ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com"],
+       8453: ["https://base-rpc.publicnode.com", "https://mainnet.base.org"],
+       42161: ["https://arbitrum-one-rpc.publicnode.com", "https://arb1.arbitrum.io/rpc"],
+       56: ["https://bsc-rpc.publicnode.com", "https://bsc-dataseed.bnbchain.org"],
+       10: ["https://optimism-rpc.publicnode.com"], 137: ["https://polygon-bor-rpc.publicnode.com"],
+       43114: ["https://avalanche-c-chain-rpc.publicnode.com"], 999: ["https://rpc.hyperliquid.xyz/evm"]}
+LLAMA_CHAIN = {1: "ethereum", 8453: "base", 42161: "arbitrum", 56: "bsc", 10: "optimism", 137: "polygon", 43114: "avax", 999: "hyperliquid"}
+EXPLORER = {1: "https://etherscan.io/address/", 8453: "https://basescan.org/address/", 42161: "https://arbiscan.io/address/",
+            56: "https://bscscan.com/address/", 10: "https://optimistic.etherscan.io/address/", 137: "https://polygonscan.com/address/",
+            43114: "https://snowtrace.io/address/", 999: "https://hyperevmscan.io/address/"}
+CHAIN_NAME = {1: "Ethereum", 8453: "Base", 42161: "Arbitrum", 56: "BNB Chain", 10: "Optimism", 137: "Polygon", 43114: "Avalanche", 999: "HyperEVM"}
+
+def eth_call(chain, to, data):
+    last = None
+    for url in RPC.get(chain, []):
+        try:
+            r = get(url, {"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": to, "data": data}, "latest"]})
+            if r.get("result") not in (None, "0x"):
+                return r["result"]
+            last = r.get("error") or "empty result"
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"eth_call failed on chain {chain}: {str(last)[:80]}")
+
+def _uint(h):
+    return int(h[2:66], 16)
+
+def _string(h):
+    b = bytes.fromhex(h[2:])
+    if len(b) >= 96:
+        n = int.from_bytes(b[32:64], "big")
+        return b[64:64 + n].decode("utf-8", "ignore")
+    return b.rstrip(b"\0").decode("utf-8", "ignore")
+
+def onchain():
+    here = os.path.dirname(os.path.abspath(__file__))
+    lst = json.load(open(os.path.join(here, "onchain_vaults.json")))["vaults"]
+    rows, raw, assets = [], [], {}
+    for v in lst:
+        ch, a = int(v["chain_id"]), v["address"].lower()
+        try:
+            asset = "0x" + eth_call(ch, a, "0x38d52e0f")[-40:]
+            vdec = _uint(eth_call(ch, a, "0x313ce567"))
+            if asset not in assets:
+                assets[asset] = {"decimals": _uint(eth_call(ch, asset, "0x313ce567")), "symbol": _string(eth_call(ch, asset, "0x95d89b41"))}
+            adec = assets[asset]["decimals"]
+            per_share = _uint(eth_call(ch, a, "0x07a2d13a" + format(10 ** vdec, "064x")))
+            total = _uint(eth_call(ch, a, "0x01e1d114"))
+        except Exception as e:
+            raw.append({**v, "error": str(e)[:160]})
+            continue
+        rec = {**v, "asset": asset, "asset_symbol": assets[asset]["symbol"], "share_price": per_share / 10 ** adec, "total_assets": total / 10 ** adec}
+        raw.append(rec)
+        time.sleep(0.2)
+    # USD prices for the vaults' assets, from DefiLlama's public price API
+    keys = sorted({f"{LLAMA_CHAIN[int(r['chain_id'])]}:{r['asset']}" for r in raw if r.get("asset") and int(r["chain_id"]) in LLAMA_CHAIN})
+    prices = {}
+    for i in range(0, len(keys), 40):
+        try:
+            prices.update((get("https://coins.llama.fi/prices/current/" + ",".join(keys[i:i + 40])).get("coins") or {}))
+        except Exception:
+            pass
+    for r in raw:
+        if r.get("error"):
+            continue
+        ch = int(r["chain_id"])
+        px = (prices.get(f"{LLAMA_CHAIN.get(ch)}:{r['asset']}") or {}).get("price")
+        rows.append({"id": f"{ch}:{r['address']}", "name": r["name"], "manager": None, "platform": r["protocol"].replace("_", " ").title(),
+                     "kind": r["protocol"].replace("_", " ").title() + ": " + ", ".join(t.replace("_", " ") for t in r["tags"][:4]),
+                     "chain": CHAIN_NAME.get(ch), "asset": r["asset_symbol"], "address": r["address"],
+                     "url": EXPLORER.get(ch, "") + r["address"] if ch in EXPLORER else (r.get("sources") or [None])[0], "sources": r.get("sources"),
+                     "tvl_usd": r["total_assets"] * px if px else None, "share_price": r["share_price"]})
+    if not rows:
+        raise RuntimeError(f"no vault could be read ({len(raw)} tried)")
+    return {"vaults": raw, "prices": prices}, rows
+
+def d2():
+    # D2 Finance: options and derivatives trading vaults; the API publishes each vault's share value at every epoch since launch
+    d = get("https://d2.finance/api/vaults")
+    vs = d if isinstance(d, list) else (d.get("vaults") or d.get("data") or [])
+    if not vs:
+        raise RuntimeError("no vaults listed")
+    rows = []
+    for v in vs:
+        if not str(v.get("deleted_at") or "0001").startswith("0001"):
+            continue
+        pc = v.get("performance_chart_data") or []
+        if isinstance(pc, str):
+            try:
+                pc = json.loads(pc)
+            except Exception:
+                pc = []
+        hist = daily([(int(x["timestamp"]), num(str(x.get("value"))[:20])) for x in pc if x.get("timestamp") and x.get("value")])
+        net, tok, cat = v.get("network") or {}, v.get("token") or {}, v.get("category") or {}
+        pct = lambda x: num(x) / 100 if num(x) is not None else None
+        rows.append({"id": str(v.get("id")), "name": " ".join(x for x in (v.get("name"), v.get("second_name")) if x).strip(), "manager": "D2 Finance",
+                     "kind": cat.get("name"), "chain": net.get("name"), "asset": (tok.get("symbol") or tok.get("token_name") or "").split(" (")[0] or None,
+                     "address": (v.get("address") or "").lower(), "url": "https://d2.finance/", "tvl_usd": num(v.get("tvl_to_usd")),
+                     "share_price": hist[-1][1] if hist else None, "risk": v.get("risk_level"),
+                     "venue_reported": {"apr_last_epoch": pct(v.get("last_epoch_apr")), "apr_lifetime": pct(v.get("lifetime_apr"))},
+                     "venue_history": hist, "description": ""})
+    return {"vaults": vs}, rows
 
 METRIC = "https://api.metric.xyz/public/v1"
 METRIC_CHAINS = {"ethereum": (1, "Ethereum"), "BSC": (56, "BNB Chain"), "Robinhood": (4663, "Robinhood Chain")}
@@ -264,7 +388,8 @@ def metric():
     return {"pools": pools}, rows
 
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
-          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000), "metric": (metric, 50_000)}
+          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000), "metric": (metric, 50_000),
+          "onchain": (onchain, 50_000), "d2": (d2, 10_000)}
 
 # ---------- shared: save, history, record, publish ----------
 
@@ -340,7 +465,7 @@ def run(venue, fn, min_tvl, today):
             keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": OURS})
     keep.sort(key=lambda r: -(r["tvl_usd"] or 0))
     os.makedirs(PUB, exist_ok=True)
-    doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "vaults": keep,
+    doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "rates_as": "fraction", "vaults": keep,
            "note": "venue_reported figures are the venue's own; *_tracked figures are computed by TradingAgentStack, from the venue's published share-price history where it has one (computed_from) and otherwise from daily share prices we saved ourselves."}
     tmp = os.path.join(PUB, f"{venue}.json.tmp")
     with open(tmp, "w") as fh:

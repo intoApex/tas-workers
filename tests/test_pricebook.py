@@ -103,7 +103,7 @@ r = scan.run("withhist", lambda: ({}, [{"id": "v", "name": "V", "tvl_usd": 1e6, 
 check("a venue with its own published history: no history file of ours", not os.path.exists(V + "/pub/withhist-prices.json") and "price history" not in r, r)
 r = scan.run("noprice", lambda: ({}, [{"id": "p", "name": "P", "tvl_usd": 1e6, "share_price": None, "no_share_price": True}]), 10_000, D[2])
 check("a venue with no share price: no history file", not os.path.exists(V + "/pub/noprice-prices.json") and "price history" not in r, r)
-check("the real venue list is unchanged", set(scan.VENUES) == {"paradex", "orderly", "kamino", "grvt", "hibachi", "lagoon", "metric"})
+check("the real venue list is whole", set(scan.VENUES) == {"paradex", "orderly", "kamino", "grvt", "hibachi", "lagoon", "metric", "onchain", "d2"})
 # 4. a fault in the backup code never stops a scan
 real_publish, real_restore = pricebook.publish, pricebook.restore
 def boom(*a, **k): raise RuntimeError("disk full")
