@@ -7,12 +7,22 @@ Public data only, no keys. Once a day:
      dHEDGE's own performance figures (labelled as dHEDGE-reported), and our record computed from the
      daily share prices we saved ourselves (return since we started tracking and the worst drop).
 The token price is the vault's onchain share price as dHEDGE reports it (USD, 18 decimals).
+The daily share prices are also kept as one small file per day in <data>/prices/, and the whole history is published as
+/srv/tas/public/dhedge/prices.json so the site's nightly run can copy it off this server: they are the one thing here that
+cannot be fetched again. Days missing from the folder are written back from that file, or from restore/dhedge/prices.json
+in this repo, before each run. See common/pricebook.py.
 """
 import datetime as dt, gzip, json, os, sys, urllib.request
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, REPO)
+from common import pricebook
 
 API = "https://api-v2.dhedge.org/graphql"
 DATA = os.environ.get("DHEDGE_DATA", "/srv/tas/data/dhedge")
 PUB = os.environ.get("DHEDGE_PUBLIC", "/srv/tas/public/dhedge")
+PRICES = os.path.join(DATA, "prices")
+RESTORE = os.environ.get("DHEDGE_RESTORE", os.path.join(REPO, "restore", "dhedge"))
 MIN_TVL = float(os.environ.get("DHEDGE_MIN_TVL", "50000"))
 UA = "TradingAgentStack-workers/1.0 (+https://tradingagentstack.com/about/; public data, once a day)"
 FIELDS = ("address name managerName managerAddress blockchainCode totalValue totalSupply tokenPrice isPrivate category poolType "
@@ -45,19 +55,32 @@ def save_day(day, funds):
         json.dump({"at": dt.datetime.utcnow().isoformat() + "Z", "funds": funds}, f)
     os.replace(p + ".tmp", p)
 
-def history():
-    """Our own daily share prices: {address: [(day, price), ...]} from the saved snapshots."""
+def save_prices(day, funds):
+    """One day's share prices, {address: price}: the small file the records are computed from."""
+    os.makedirs(PRICES, exist_ok=True)
     out = {}
+    for f in funds:
+        p = e18(f.get("tokenPrice"))
+        if p and p > 0 and f.get("address"):
+            out[f["address"].lower()] = p
+    p = os.path.join(PRICES, f"{day}.json")
+    with open(p + ".tmp", "w") as fh:
+        json.dump(out, fh, separators=(",", ":"))
+    os.replace(p + ".tmp", p)
+
+def backfill():
+    """Days saved before the prices folder existed: write their price file from the raw snapshot, once."""
+    have, n = set(pricebook.days_on_disk(PRICES)), 0
     for name in sorted(os.listdir(DATA)):
-        if not name.endswith(".json.gz"): continue
-        day = name[:10]
+        if not name.endswith(".json.gz") or name[:10] in have: continue
         try: funds = json.load(gzip.open(os.path.join(DATA, name), "rt"))["funds"]
         except Exception: continue
-        for f in funds:
-            p = e18(f.get("tokenPrice"))
-            if p and p > 0:
-                out.setdefault(f["address"].lower(), []).append((day, p))
-    return out
+        save_prices(name[:10], funds); n += 1
+    return n
+
+def history():
+    """Our own daily share prices: {address: [(day, price), ...]}."""
+    return pricebook.series(PRICES)
 
 def record(series):
     if len(series) < 2: return {"tracking_days": len(series)}
@@ -74,6 +97,15 @@ def main():
     if len(funds) < 100:
         raise RuntimeError(f"only {len(funds)} vaults returned")
     save_day(today, funds)
+    save_prices(today, funds)
+    book, spare = os.path.join(PUB, "prices.json"), os.path.join(RESTORE, "prices.json")
+    # The backup must never stop the snapshot: whatever goes wrong in it is printed and the run carries on.
+    filled, back, src, trouble = 0, 0, None, ""
+    try:
+        filled = backfill()
+        back, src = pricebook.restore(PRICES, [book, spare])
+    except Exception as e:
+        trouble = f"; price restore failed: {str(e)[:120]}"
     hist = history()
     rows = []
     for f in funds:
@@ -96,7 +128,16 @@ def main():
     with open(os.path.join(PUB, "vaults.json.tmp"), "w") as fh:
         json.dump(doc, fh, separators=(",", ":"))
     os.replace(os.path.join(PUB, "vaults.json.tmp"), os.path.join(PUB, "vaults.json"))
-    print(f"{today}: {len(funds)} listed, {len(rows)} with ${MIN_TVL:,.0f}+")
+    # price history for vaults with a tenth of the publishing minimum or more (and any already in the file): see pricebook
+    worth = {f["address"].lower() for f in funds if not f.get("isPrivate") and (e18(f.get("totalValue")) or 0) >= MIN_TVL / 10}
+    try:
+        days, n = pricebook.publish(PRICES, book, "dhedge", today, worth, also=[spare])
+        told = f"; price history published: {days} days, {n} vaults"
+    except Exception as e:
+        told = f"; price history not published: {str(e)[:120]}"
+    print(f"{today}: {len(funds)} listed, {len(rows)} with ${MIN_TVL:,.0f}+" + told
+          + (f"; {filled} days of prices written from saved snapshots" if filled else "")
+          + (f"; {back} days of prices restored from {src}" if back else "") + trouble)
     return 0
 
 if __name__ == "__main__":
