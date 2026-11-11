@@ -20,6 +20,25 @@ how the numbers on the site are produced.
 - **Public data only**, through public or official endpoints, at a polite rate.
 - Every published number keeps the date it was measured and the source it came from.
 
+## The one thing that cannot be fetched again
+
+Everything here can be rebuilt from public sources except the daily share prices behind our own vault records (Paradex,
+Orderly, Kamino, Lagoon, dHEDGE): a past day's price is gone once the day is over. They live in
+`/srv/tas/data/vaults/<venue>/prices/<day>.json` and `/srv/tas/data/dhedge/prices/<day>.json`.
+
+- **Backup.** Each scan also publishes the whole history as one file, `vaults/<venue>-prices.json` and `dhedge/prices.json`
+  under https://workers.tradingagentstack.com/ (format in `common/pricebook.py`). The site's nightly "Data tracks" run copies
+  them to the `vault-prices/` folder of its `perf-data` branch, and refuses a copy that has fewer days than the one it holds.
+  The files cover vaults with at least a tenth of the venue's publishing minimum in them, and any vault once it is in.
+- **Restore after a lost disk.** Copy the files from `vault-prices/` on the site repository's `perf-data` branch into this
+  repository with a pull request: `restore/vaults/<venue>-prices.json` and `restore/dhedge/prices.json`. The server pulls
+  the repo, and the next daily scan writes back every day its prices folder lacks, then computes the records as before.
+  Days already on disk are never changed, so the files can stay in `restore/` afterwards; a run that happened before the
+  restore does no harm.
+- **Restore after a lost data folder** (the public folder survived): nothing to do, the next scan restores from the
+  published file.
+- Test, no network: `python3 tests/test_pricebook.py`.
+
 ## License
 
 MIT
@@ -27,5 +46,6 @@ MIT
 ## Services
 
 - `okx-copytrading` (compose.yaml, okx/snapshot.py): once a day, a snapshot of OKX's official public copy-trading endpoints (lead trader ranks, daily and weekly PnL, closed positions). Raw data stays on the server; https://workers.tradingagentstack.com/okx-status.json shows counts only.
-- `strategy-lab` (compose.yaml, strategy-lab/): forward tests of public open-source strategies (first source: freqtrade/freqtrade-strategies) on Binance spot candles, scored only on data after the day each strategy was added, with a one-time lookahead-bias check. Results: https://workers.tradingagentstack.com/strategy-lab/results.json Our own baselines (hold, moving-average cross, dip buying, breakout and a coin-flip control) are in `strategy-lab/baselines/`. A strategy's file is frozen on the day it is added: it is never replaced afterwards, and its SHA-256 is published with its result. New or changed baselines go in a new file under new class names.
-- `vaults/scan.py` (deploy.sh, daily after 00:45 UTC): vaults and automated strategies on more venues, from each venue's own public API with no keys: Paradex vaults (Starknet perps), Orderly strategy vaults, Kamino automated liquidity strategies (Solana), GRVT strategy vaults and Hibachi vaults (perp DEXs that publish each vault's share price since launch, so the record covers the whole life of the vault), and Lagoon on-chain vaults ($100k+, all chains, with the curator and strategy type). Raw lists stay on the server; https://workers.tradingagentstack.com/vaults/<venue>.json has the ones with real money in them, each with the venue's own figures labelled as the venue's and our own record (return, worst drop, annualised from 30 days, last 90 days) computed from the venue's share-price history where it publishes one, otherwise from the daily share prices we save. `computed_from` says which.
+- `strategy-lab` (compose.yaml, strategy-lab/): forward tests of public open-source strategies (first source: freqtrade/freqtrade-strategies) on Binance spot candles, scored only on data after the day each strategy was added, with a one-time lookahead-bias check. Results: https://workers.tradingagentstack.com/strategy-lab/results.json Our own baselines are in `strategy-lab/baselines/`: hold, moving-average cross, dip buying, breakout and a coin-flip control (`tas_baselines.py`), and two grid bots, two DCA bots and plain weekly buying (`tas_baselines_2.py`). A strategy's file is frozen on the day it is added: it is never replaced afterwards, and its SHA-256 is published with its result. New or changed baselines go in a new file under new class names. Community collections are listed in `PINNED` in `strategy-lab/lab.py`, each pinned to one commit and fetched once; a file is admitted only if a read of its code (it is not run) shows it imports nothing beyond what a strategy needs and does not open files or run commands, and the files that were not admitted are published with the reason at https://workers.tradingagentstack.com/strategy-lab/not-admitted.json A strategy that times out or is killed three runs in a row is retired. The container can write only to its own results folder. `strategy-lab/harness/` runs the lab offline against the real Freqtrade for tests.
+- `strategy-lab-futures` (compose.yaml, same `strategy-lab/lab.py` with `LAB_MODE=futures`): the leverage board. Binance USDT perpetual futures, isolated margin, $1,000 paper wallet, funding fees and liquidations included, shorting allowed. It runs the official collection's futures strategies and our own leverage ladder in `strategy-lab/baselines-futures/` (holding Bitcoin, a long-and-short trend rule and RSI dip buying, each at several leverage levels). Results: https://workers.tradingagentstack.com/strategy-lab-futures/results.json Never ranked together with the spot lab. Both labs publish `max_drawdown_marked`: the worst drop of the wallet with open positions valued every hour, next to Freqtrade's own drawdown, which only moves when a trade closes.
+- `vaults/scan.py` (deploy.sh, daily after 00:45 UTC): vaults and automated strategies on more venues, from each venue's own public API with no keys: Paradex vaults (Starknet perps), Orderly strategy vaults, Kamino automated liquidity strategies (Solana), GRVT strategy vaults and Hibachi vaults (perp DEXs that publish each vault's share price since launch, so the record covers the whole life of the vault), Lagoon on-chain vaults ($100k+, all chains, with the curator and strategy type), and Metric pools ($50k+; a DEX on Ethereum, BNB Chain and Robinhood Chain where a curator or market maker runs each pool's pricing. A pool has no share price, so those rows carry Metric's own figures and no record of ours). Raw lists stay on the server; https://workers.tradingagentstack.com/vaults/<venue>.json has the ones with real money in them, each with the venue's own figures labelled as the venue's and our own record (return, worst drop, annualised from 30 days, last 90 days) computed from the venue's share-price history where it publishes one, otherwise from the daily share prices we save. `computed_from` says which.

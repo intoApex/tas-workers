@@ -26,14 +26,37 @@ services:
     volumes:
       - ./strategy-lab:/app:ro
       - /srv/tas/data/strategy-lab:/freqtrade/user_data
-      - /srv/tas/public:/public
+      - /srv/tas/public/strategy-lab:/public/strategy-lab  # only its own results folder: it runs community code
     environment:
-      LAB_RUN_HOUR: "2"
+      LAB_RUN_HOUR: "22"  # 22:00 UTC: done before the site fetches results (scheduled 01:17 UTC; GitHub starts it between 07:10 and 08:25)
       PYTHONUSERBASE: /home/ftuser/.local
-      LAB_LOOKAHEAD_PER_DAY: "6"
-      LAB_CODE_REV: "5"  # bump to restart the lab with new code (the code is read once at start)
+      LAB_LOOKAHEAD_PER_DAY: "12"
+      LAB_CODE_REV: "9"  # bump to restart the lab with new code; the lab then runs at once instead of waiting for the daily run
     mem_limit: 2g
     cpus: 1.5
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "2"}
+
+  # The leverage board: the same runner in futures mode (Binance USDT perpetuals, isolated margin, shorting allowed),
+  # with its own data, registry and results. Never ranked together with the spot lab.
+  strategy-lab-futures:
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["python", "-u", "/app/lab.py"]
+    volumes:
+      - ./strategy-lab:/app:ro
+      - /srv/tas/data/strategy-lab-futures:/freqtrade/user_data
+      - /srv/tas/public/strategy-lab-futures:/public/strategy-lab-futures
+    environment:
+      LAB_MODE: futures
+      LAB_RUN_HOUR: "21"  # 21:00 UTC: an hour before the spot lab, and before the site's nightly fetch
+      PYTHONUSERBASE: /home/ftuser/.local
+      LAB_LOOKAHEAD_PER_DAY: "6"
+      LAB_CODE_REV: "1"  # bump to restart the leverage board with new code; it then runs at once
+    mem_limit: 1500m
+    cpus: 1.0
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "2"}

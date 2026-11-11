@@ -15,14 +15,27 @@ Venues (all public endpoints, no login):
            (perp DEX strategy vaults; the venue publishes each vault's share price every 8 hours since launch)
   hibachi  https://data-api.hibachi.xyz/vault/info and /vault/performance   (perp DEX vaults; daily share price since launch)
   lagoon   https://app.lagoon.finance/api/vaults and /api/vault             (on-chain ERC-7540 vaults run by curators, many chains)
+  metric   https://api.metric.xyz/public/v1/evm/metadata                    (DEX pools whose pricing is run by a curator or market
+           maker; Ethereum, BNB Chain, Robinhood Chain). A pool has no share token, so there is no share price to track:
+           these rows carry Metric's own figures only and are published without a record of ours.
 Where the venue publishes a vault's share-price history (GRVT, Hibachi), the record is computed from that full history;
 everywhere else it is computed from the daily share prices we save ourselves, so it starts on the day we started tracking.
+Those saved prices are the one thing here that cannot be fetched again, so for every venue whose records rest on them the
+whole history is also published as /srv/tas/public/vaults/<venue>-prices.json, which the site's nightly run copies off this
+server, and days missing from the prices folder are written back from that file (or from restore/vaults/ in this repo)
+before each scan. See common/pricebook.py.
 A venue that fails keeps yesterday's public file; the others still run.
 """
 import datetime as dt, gzip, json, os, sys, time, urllib.request
 
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, REPO)
+from common import pricebook
+
 DATA = os.environ.get("VAULTS_DATA", "/srv/tas/data/vaults")
 PUB = os.environ.get("VAULTS_PUBLIC", "/srv/tas/public/vaults")
+RESTORE = os.environ.get("VAULTS_RESTORE", os.path.join(REPO, "restore", "vaults"))
+OURS = "our daily snapshots"
 UA = "TradingAgentStack-workers/1.0 (+https://tradingagentstack.com/about/; public data, once a day)"
 
 def get(url, body=None):
@@ -54,7 +67,8 @@ def num(x):
     except (TypeError, ValueError):
         return None
 
-# ---------- venue adapters: each returns (raw, rows); a row needs id, name, tvl_usd and share_price ----------
+# ---------- venue adapters: each returns (raw, rows); a row needs id, name, tvl_usd and share_price
+# (or no_share_price: True where the venue has none, which publishes the row without a record of ours) ----------
 
 def paradex():
     meta = get("https://api.prod.paradex.trade/v1/vaults").get("results") or []
@@ -224,8 +238,51 @@ def lagoon():
                      "description": (dd.get("shortDescription") or dd.get("description") or "")[:300]})
     return {"vaults": listed, "details": details}, rows
 
+METRIC = "https://api.metric.xyz/public/v1"
+METRIC_CHAINS = {"ethereum": (1, "Ethereum"), "BSC": (56, "BNB Chain"), "Robinhood": (4663, "Robinhood Chain")}
+
+def metric():
+    # Metric (metric.xyz): a curator or market maker runs each pool's pricing and anyone can add liquidity. Liquidity sits in
+    # price bins, not behind a share token, so there is nothing for us to price day by day: no_share_price rows are published
+    # with Metric's own figures and no record of ours. aprBps7d is fees over size; tradingPnlAprBps7d is a position's value
+    # against simply holding the two tokens; markout is what the pool made on its trades measured 5 minutes after each one.
+    try:
+        ids = {c.get("name"): c.get("chainId") for c in (get(f"{METRIC}/chains").get("chains") or [])}
+    except Exception:
+        ids = {}
+    pools, off = [], 0
+    while off is not None and len(pools) < 5000:
+        d = get(f"{METRIC}/evm/metadata?include24h=true&count=500&offset={off}&sortBy=tvl&sortOrder=desc&minTvlFiat=1000")
+        page = d.get("data") or []
+        pools += page
+        off = d.get("nextOffset") if page else None
+        time.sleep(1)
+    if len(pools) < 10:
+        raise RuntimeError(f"only {len(pools)} pools listed")
+    bps = lambda x: None if num(x) is None else round(num(x) / 10000, 6)
+    rows = []
+    for p in pools:
+        known = METRIC_CHAINS.get(p.get("chain"), (None, p.get("chain")))
+        cid, addr = ids.get(p.get("chain")) or known[0], p.get("poolAddress")
+        if not cid or not addr:
+            continue
+        mk = lambda w: bps(((((p.get("markoutByWindow") or {}).get(w) or {}).get("byHorizon") or {}).get("5m") or {}).get("aprBps"))
+        vol = p.get("volumeByWindow") or {}
+        made = num(p.get("createdTimestamp"))
+        rows.append({"id": f"{cid}:{addr.lower()}", "name": p.get("pair"), "manager": p.get("adminUsername") or None, "kind": "active pool",
+                     "chain": known[1], "address": addr, "url": f"https://app.metric.xyz/pool/{cid}/{addr}",
+                     "tvl_usd": num(p.get("tvlFiat")), "share_price": None, "no_share_price": True,
+                     "verified_curator": bool(p.get("verifiedAdmin")), "tier": (p.get("classificationSummary") or {}).get("tierQualification"),
+                     "deposits_by_allowlist": bool(p.get("depositWhitelistingEnabled")), "paused": bool(p.get("pauseLevel")),
+                     "price_feed": p.get("priceProviderStatus"),
+                     "created": dt.datetime.utcfromtimestamp(made).date().isoformat() if made else None,
+                     "venue_reported": {"markout_apr_7d": mk("7d"), "markout_apr_30d": mk("30d"), "fee_apr_7d": bps(p.get("aprBps7d")),
+                                        "vs_holding_apr_7d": bps(p.get("tradingPnlAprBps7d")),
+                                        "volume_7d_usd": num(vol.get("7d")), "volume_30d_usd": num(vol.get("30d"))}})
+    return {"pools": pools}, rows
+
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
-          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000)}
+          "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000), "metric": (metric, 50_000)}
 
 # ---------- shared: save, history, record, publish ----------
 
@@ -244,17 +301,11 @@ def save_prices(venue, day, rows):
     with open(os.path.join(d, f"{day}.json"), "w") as f:
         json.dump({r["id"]: r["share_price"] for r in rows if r.get("id") and r.get("share_price")}, f, separators=(",", ":"))
 
+def prices_dir(venue):
+    return os.path.join(DATA, venue, "prices")
+
 def history(venue):
-    out, d = {}, os.path.join(DATA, venue, "prices")
-    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        try:
-            prices = json.load(open(os.path.join(d, name)))
-        except Exception:
-            continue
-        for k, p in prices.items():
-            if p and p > 0:
-                out.setdefault(k, []).append((name[:10], p))
-    return out
+    return pricebook.series(prices_dir(venue))
 
 def record(series):
     if len(series) < 2:
@@ -277,19 +328,34 @@ def record(series):
 
 def run(venue, fn, min_tvl, today):
     raw, rows = fn()
+    book, spare = os.path.join(PUB, f"{venue}-prices.json"), os.path.join(RESTORE, f"{venue}-prices.json")
+    # days the prices folder has lost come back from the published history, or from a copy placed in restore/vaults/
+    # The backup must never stop a scan: whatever goes wrong in it is reported in the status line and the scan carries on.
+    back, src, trouble = 0, None, ""
+    try:
+        back, src = pricebook.restore(prices_dir(venue), [book, spare])
+    except Exception as e:
+        trouble = f"; price restore failed: {str(e)[:120]}"
     save_day(venue, today, raw)
     save_prices(venue, today, rows)
     hist = history(venue)
+    # vaults worth keeping a price history for: a tenth of the publishing minimum, so one that grows into the list has a record
+    worth = {r["id"] for r in rows if r.get("id") and r.get("share_price") and (r.get("tvl_usd") or 0) >= min_tvl / 10}
     keep = []
     for r in rows:
-        if (r.get("tvl_usd") or 0) < min_tvl or not r.get("share_price"):
+        if (r.get("tvl_usd") or 0) < min_tvl:
+            continue
+        if r.pop("no_share_price", False):
+            # the venue has no share price (Metric): its own figures only, and no record of ours
+            keep.append({**r, "tracking_since": None, "tracking_days": 0, "computed_from": None}); continue
+        if not r.get("share_price"):
             continue
         vh = r.pop("venue_history", None)
         if vh and len(vh) >= 2:
             # the venue's own published share prices since launch; we compute the record from them
             keep.append({**r, **record(vh), "computed_from": "venue share-price history"})
         else:
-            keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": "our daily snapshots"})
+            keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": OURS})
     keep.sort(key=lambda r: -(r["tvl_usd"] or 0))
     os.makedirs(PUB, exist_ok=True)
     doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "rates_as": "fraction", "vaults": keep,
@@ -298,7 +364,16 @@ def run(venue, fn, min_tvl, today):
     with open(tmp, "w") as fh:
         json.dump(doc, fh, separators=(",", ":"))
     os.replace(tmp, os.path.join(PUB, f"{venue}.json"))
-    return f"{venue}: {len(rows)} listed, {len(keep)} with ${min_tvl:,.0f}+"
+    msg = f"{venue}: {len(rows)} listed, {len(keep)} with ${min_tvl:,.0f}+"
+    if any(k["computed_from"] == OURS for k in keep) or os.path.exists(book) or os.path.exists(spare):
+        try:
+            days, n = pricebook.publish(prices_dir(venue), book, venue, today, worth, also=[spare])
+            msg += f"; price history published: {days} days, {n} vaults"
+        except Exception as e:
+            trouble += f"; price history not published: {str(e)[:120]}"
+    if back:
+        msg += f"; {back} days of prices restored from {os.path.relpath(src, REPO) if src.startswith(REPO) else src}"
+    return msg + trouble
 
 def main():
     today = dt.datetime.utcnow().date().isoformat()
