@@ -20,12 +20,22 @@ Venues (all public endpoints, no login):
            these rows carry Metric's own figures only and are published without a record of ours.
 Where the venue publishes a vault's share-price history (GRVT, Hibachi), the record is computed from that full history;
 everywhere else it is computed from the daily share prices we save ourselves, so it starts on the day we started tracking.
+Those saved prices are the one thing here that cannot be fetched again, so for every venue whose records rest on them the
+whole history is also published as /srv/tas/public/vaults/<venue>-prices.json, which the site's nightly run copies off this
+server, and days missing from the prices folder are written back from that file (or from restore/vaults/ in this repo)
+before each scan. See common/pricebook.py.
 A venue that fails keeps yesterday's public file; the others still run.
 """
 import datetime as dt, gzip, json, os, sys, time, urllib.request
 
+REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, REPO)
+from common import pricebook
+
 DATA = os.environ.get("VAULTS_DATA", "/srv/tas/data/vaults")
 PUB = os.environ.get("VAULTS_PUBLIC", "/srv/tas/public/vaults")
+RESTORE = os.environ.get("VAULTS_RESTORE", os.path.join(REPO, "restore", "vaults"))
+OURS = "our daily snapshots"
 UA = "TradingAgentStack-workers/1.0 (+https://tradingagentstack.com/about/; public data, once a day)"
 
 def get(url, body=None):
@@ -273,17 +283,11 @@ def save_prices(venue, day, rows):
     with open(os.path.join(d, f"{day}.json"), "w") as f:
         json.dump({r["id"]: r["share_price"] for r in rows if r.get("id") and r.get("share_price")}, f, separators=(",", ":"))
 
+def prices_dir(venue):
+    return os.path.join(DATA, venue, "prices")
+
 def history(venue):
-    out, d = {}, os.path.join(DATA, venue, "prices")
-    for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
-        try:
-            prices = json.load(open(os.path.join(d, name)))
-        except Exception:
-            continue
-        for k, p in prices.items():
-            if p and p > 0:
-                out.setdefault(k, []).append((name[:10], p))
-    return out
+    return pricebook.series(prices_dir(venue))
 
 def record(series):
     if len(series) < 2:
@@ -306,9 +310,14 @@ def record(series):
 
 def run(venue, fn, min_tvl, today):
     raw, rows = fn()
+    book, spare = os.path.join(PUB, f"{venue}-prices.json"), os.path.join(RESTORE, f"{venue}-prices.json")
+    # days the prices folder has lost come back from the published history, or from a copy placed in restore/vaults/
+    back, src = pricebook.restore(prices_dir(venue), [book, spare])
     save_day(venue, today, raw)
     save_prices(venue, today, rows)
     hist = history(venue)
+    # vaults worth keeping a price history for: a tenth of the publishing minimum, so one that grows into the list has a record
+    worth = {r["id"] for r in rows if r.get("id") and r.get("share_price") and (r.get("tvl_usd") or 0) >= min_tvl / 10}
     keep = []
     for r in rows:
         if (r.get("tvl_usd") or 0) < min_tvl:
@@ -323,7 +332,7 @@ def run(venue, fn, min_tvl, today):
             # the venue's own published share prices since launch; we compute the record from them
             keep.append({**r, **record(vh), "computed_from": "venue share-price history"})
         else:
-            keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": "our daily snapshots"})
+            keep.append({**r, **record(hist.get(r["id"], [])), "computed_from": OURS})
     keep.sort(key=lambda r: -(r["tvl_usd"] or 0))
     os.makedirs(PUB, exist_ok=True)
     doc = {"as_of": today, "venue": venue, "listed": len(rows), "min_tvl_usd": min_tvl, "vaults": keep,
@@ -332,7 +341,13 @@ def run(venue, fn, min_tvl, today):
     with open(tmp, "w") as fh:
         json.dump(doc, fh, separators=(",", ":"))
     os.replace(tmp, os.path.join(PUB, f"{venue}.json"))
-    return f"{venue}: {len(rows)} listed, {len(keep)} with ${min_tvl:,.0f}+"
+    msg = f"{venue}: {len(rows)} listed, {len(keep)} with ${min_tvl:,.0f}+"
+    if any(k["computed_from"] == OURS for k in keep) or os.path.exists(book) or os.path.exists(spare):
+        days, n = pricebook.publish(prices_dir(venue), book, venue, today, worth, also=[spare])
+        msg += f"; price history published: {days} days, {n} vaults"
+    if back:
+        msg += f"; {back} days of prices restored from {os.path.relpath(src, REPO) if src.startswith(REPO) else src}"
+    return msg
 
 def main():
     today = dt.datetime.utcnow().date().isoformat()

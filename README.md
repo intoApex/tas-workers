@@ -20,6 +20,25 @@ how the numbers on the site are produced.
 - **Public data only**, through public or official endpoints, at a polite rate.
 - Every published number keeps the date it was measured and the source it came from.
 
+## The one thing that cannot be fetched again
+
+Everything here can be rebuilt from public sources except the daily share prices behind our own vault records (Paradex,
+Orderly, Kamino, Lagoon, dHEDGE): a past day's price is gone once the day is over. They live in
+`/srv/tas/data/vaults/<venue>/prices/<day>.json` and `/srv/tas/data/dhedge/prices/<day>.json`.
+
+- **Backup.** Each scan also publishes the whole history as one file, `vaults/<venue>-prices.json` and `dhedge/prices.json`
+  under https://workers.tradingagentstack.com/ (format in `common/pricebook.py`). The site's nightly "Data tracks" run copies
+  them to the `vault-prices/` folder of its `perf-data` branch, and refuses a copy that has fewer days than the one it holds.
+  The files cover vaults with at least a tenth of the venue's publishing minimum in them, and any vault once it is in.
+- **Restore after a lost disk.** Copy the files from `vault-prices/` on the site repository's `perf-data` branch into this
+  repository with a pull request: `restore/vaults/<venue>-prices.json` and `restore/dhedge/prices.json`. The server pulls
+  the repo, and the next daily scan writes back every day its prices folder lacks, then computes the records as before.
+  Days already on disk are never changed, so the files can stay in `restore/` afterwards; a run that happened before the
+  restore does no harm.
+- **Restore after a lost data folder** (the public folder survived): nothing to do, the next scan restores from the
+  published file.
+- Test, no network: `python3 tests/test_pricebook.py`.
+
 ## License
 
 MIT
