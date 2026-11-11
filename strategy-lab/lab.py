@@ -255,7 +255,13 @@ def backtest(name, start, tf=None):
         if not FUT and "can_short" in out:  # the spot lab lists futures-only strategies but does not run them
             return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
         return {"status": "error", "error": out[-600:]}
-    s = parse_last_backtest()["strategy"].get(name, {})
+    s = parse_last_backtest()["strategy"].get(name)
+    if s is None:
+        # Freqtrade ended without an error code but the newest result file has no entry for this strategy, so what was
+        # read is another strategy's file. Until 2026-11-11 this came back as "ok" with every number empty: 18 bots sat on
+        # the site as running with no result, and would have stayed that way. It is an error, with the end of Freqtrade's
+        # output kept so the open data says why.
+        return {"status": "error", "error": "the run ended without a result for this strategy. Last output: " + out[-500:]}
     trades = s.get("trades", [])
     extra = {"leverage": max([t.get("leverage") or 1 for t in trades] or [1]),
              "liquidations": sum(1 for t in trades if t.get("exit_reason") == "liquidation"),
