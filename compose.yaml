@@ -28,7 +28,11 @@ services:
       - /srv/tas/data/strategy-lab:/freqtrade/user_data
       - /srv/tas/public/strategy-lab:/public/strategy-lab  # only its own results folder: it runs community code
     environment:
-      LAB_RUN_HOUR: "22"  # 22:00 UTC: done before the site fetches results (scheduled 01:17 UTC; GitHub starts it between 07:10 and 08:25)
+      # 05:00 UTC since 2026-11-11 (was 22:00). The site fetches results once a day, in practice between 07:10 and 08:25 UTC
+      # (GitHub starts the 01:17 schedule that late). A 22:00 run was stamped with yesterday's date by the time the site showed
+      # it, so the board always read one day behind and a bot that joined showed "starts <yesterday>" for a day and a half.
+      # A 05:00 run takes about an hour, is stamped with today's date, and is two to three hours old when it goes up.
+      LAB_RUN_HOUR: "5"
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "12"
       LAB_CODE_REV: "9"  # bump to restart the lab with new code; the lab then runs at once instead of waiting for the daily run
@@ -51,7 +55,7 @@ services:
       - /srv/tas/public/strategy-lab-futures:/public/strategy-lab-futures
     environment:
       LAB_MODE: futures
-      LAB_RUN_HOUR: "21"  # 21:00 UTC: an hour before the spot lab, and before the site's nightly fetch
+      LAB_RUN_HOUR: "4"  # 04:00 UTC since 2026-11-11 (was 21:00): an hour before the spot lab, same day's date as the site's fetch
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "6"
       LAB_CODE_REV: "1"  # bump to restart the leverage board with new code; it then runs at once
