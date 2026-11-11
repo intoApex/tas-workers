@@ -104,6 +104,14 @@ check("a venue with its own published history: no history file of ours", not os.
 r = scan.run("noprice", lambda: ({}, [{"id": "p", "name": "P", "tvl_usd": 1e6, "share_price": None, "no_share_price": True}]), 10_000, D[2])
 check("a venue with no share price: no history file", not os.path.exists(V + "/pub/noprice-prices.json") and "price history" not in r, r)
 check("the real venue list is unchanged", set(scan.VENUES) == {"paradex", "orderly", "kamino", "grvt", "hibachi", "lagoon", "metric"})
+# 4. a fault in the backup code never stops a scan
+real_publish, real_restore = pricebook.publish, pricebook.restore
+def boom(*a, **k): raise RuntimeError("disk full")
+pricebook.publish = boom; pricebook.restore = boom
+msg = go(3)
+check("backup code that fails: the scan still publishes the vaults and says what went wrong", msg.startswith("demo: 3 listed, 2 with $10,000+") and "price restore failed: disk full" in msg and "price history not published: disk full" in msg
+      and pub()["big"]["return_tracked"] == 0.21, msg)
+pricebook.publish, pricebook.restore = real_publish, real_restore
 
 # ---------- dhedge/snapshot.py ----------
 H = os.path.join(tmp, "dhedge")
@@ -136,6 +144,10 @@ check("dHEDGE: record as before", list(rows) == ["0xbig"] and rows["0xbig"]["tra
 hb = jl(H + "/pub/prices.json")
 check("dHEDGE: history file has $5,000+ public vaults only", hb["venue"] == "dhedge" and hb["days"] == ["2026-11-07", "2026-11-08", "2026-11-09"] and hb["prices"] == {"0xbig": [0, [1.0, 1.25, 1.5]], "0xmid": [0, [1.0, 1.5, 1.2]]}, hb)
 check("dHEDGE: a second run the same day writes nothing new", "written from saved" not in run_dh() and "restored" not in msg)
+pricebook.publish = boom; pricebook.restore = boom
+msg2 = run_dh()
+check("dHEDGE: backup code that fails does not stop the snapshot", msg2.startswith("2026-11-09: 123 listed, 1 with $50,000+") and "price history not published: disk full" in msg2 and "price restore failed: disk full" in msg2, msg2)
+pricebook.publish, pricebook.restore = real_publish, real_restore
 # the disk is lost; the backup is put in restore/; the next day's run brings the record back
 wipe(H + "/data"); wipe(H + "/pub"); os.makedirs(H + "/restore"); json.dump(hb, open(H + "/restore/prices.json", "w"))
 Day.now_day = "2026-11-10"; dh.gql = lambda q: {"allFunds": funds(1.2, 1.3)}

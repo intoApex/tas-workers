@@ -98,9 +98,14 @@ def main():
         raise RuntimeError(f"only {len(funds)} vaults returned")
     save_day(today, funds)
     save_prices(today, funds)
-    filled = backfill()
     book, spare = os.path.join(PUB, "prices.json"), os.path.join(RESTORE, "prices.json")
-    back, src = pricebook.restore(PRICES, [book, spare])
+    # The backup must never stop the snapshot: whatever goes wrong in it is printed and the run carries on.
+    filled, back, src, trouble = 0, 0, None, ""
+    try:
+        filled = backfill()
+        back, src = pricebook.restore(PRICES, [book, spare])
+    except Exception as e:
+        trouble = f"; price restore failed: {str(e)[:120]}"
     hist = history()
     rows = []
     for f in funds:
@@ -125,10 +130,14 @@ def main():
     os.replace(os.path.join(PUB, "vaults.json.tmp"), os.path.join(PUB, "vaults.json"))
     # price history for vaults with a tenth of the publishing minimum or more (and any already in the file): see pricebook
     worth = {f["address"].lower() for f in funds if not f.get("isPrivate") and (e18(f.get("totalValue")) or 0) >= MIN_TVL / 10}
-    days, n = pricebook.publish(PRICES, book, "dhedge", today, worth, also=[spare])
-    print(f"{today}: {len(funds)} listed, {len(rows)} with ${MIN_TVL:,.0f}+; price history published: {days} days, {n} vaults"
+    try:
+        days, n = pricebook.publish(PRICES, book, "dhedge", today, worth, also=[spare])
+        told = f"; price history published: {days} days, {n} vaults"
+    except Exception as e:
+        told = f"; price history not published: {str(e)[:120]}"
+    print(f"{today}: {len(funds)} listed, {len(rows)} with ${MIN_TVL:,.0f}+" + told
           + (f"; {filled} days of prices written from saved snapshots" if filled else "")
-          + (f"; {back} days of prices restored from {src}" if back else ""))
+          + (f"; {back} days of prices restored from {src}" if back else "") + trouble)
     return 0
 
 if __name__ == "__main__":

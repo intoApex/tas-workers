@@ -312,7 +312,12 @@ def run(venue, fn, min_tvl, today):
     raw, rows = fn()
     book, spare = os.path.join(PUB, f"{venue}-prices.json"), os.path.join(RESTORE, f"{venue}-prices.json")
     # days the prices folder has lost come back from the published history, or from a copy placed in restore/vaults/
-    back, src = pricebook.restore(prices_dir(venue), [book, spare])
+    # The backup must never stop a scan: whatever goes wrong in it is reported in the status line and the scan carries on.
+    back, src, trouble = 0, None, ""
+    try:
+        back, src = pricebook.restore(prices_dir(venue), [book, spare])
+    except Exception as e:
+        trouble = f"; price restore failed: {str(e)[:120]}"
     save_day(venue, today, raw)
     save_prices(venue, today, rows)
     hist = history(venue)
@@ -343,11 +348,14 @@ def run(venue, fn, min_tvl, today):
     os.replace(tmp, os.path.join(PUB, f"{venue}.json"))
     msg = f"{venue}: {len(rows)} listed, {len(keep)} with ${min_tvl:,.0f}+"
     if any(k["computed_from"] == OURS for k in keep) or os.path.exists(book) or os.path.exists(spare):
-        days, n = pricebook.publish(prices_dir(venue), book, venue, today, worth, also=[spare])
-        msg += f"; price history published: {days} days, {n} vaults"
+        try:
+            days, n = pricebook.publish(prices_dir(venue), book, venue, today, worth, also=[spare])
+            msg += f"; price history published: {days} days, {n} vaults"
+        except Exception as e:
+            trouble += f"; price history not published: {str(e)[:120]}"
     if back:
         msg += f"; {back} days of prices restored from {os.path.relpath(src, REPO) if src.startswith(REPO) else src}"
-    return msg
+    return msg + trouble
 
 def main():
     today = dt.datetime.utcnow().date().isoformat()
