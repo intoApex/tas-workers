@@ -46,7 +46,7 @@ fi
 # Vaults on more venues (daily, after 00:45 UTC): Paradex, Orderly and Kamino from their own public APIs.
 # Raw lists stay on the server; public summaries in $PUBLIC/vaults/<venue>.json, health in $PUBLIC/vaults/status.json.
 if [ "$(date -u +%H%M)" -ge 0045 ] && { [ "$(cat "$DATA/.vaults.day" 2>/dev/null)" != "$day" ] || [ vaults/scan.py -nt "$DATA/.vaults.day" ]; }; then
-  timeout 600 python3 vaults/scan.py >"$DATA/vaults.log" 2>&1; echo "$day" > "$DATA/.vaults.day"
+  timeout 900 python3 vaults/scan.py >"$DATA/vaults.log" 2>&1; echo "$day" > "$DATA/.vaults.day"
 fi
 
 # Hyperliquid top traders (daily, after 01:15 UTC): the leaderboard's biggest 30-day winners, each wallet's record worked out
@@ -55,6 +55,13 @@ fi
 # worked, so a bad day is tried again tomorrow (or as soon as the script changes), not every ten minutes.
 if [ "$(date -u +%H%M)" -ge 0115 ] && { [ "$(cat "$DATA/.hltraders.day" 2>/dev/null)" != "$day" ] || [ hyperliquid/traders.py -nt "$DATA/.hltraders.day" ]; }; then
   timeout 900 python3 hyperliquid/traders.py >"$DATA/hltraders.log" 2>&1; echo "$day" > "$DATA/.hltraders.day"
+fi
+
+# Polymarket top traders (daily, after 01:30 UTC): the leaderboard's biggest 30-day winners, each wallet's lifetime profit day
+# by day from Polymarket's own Data API, and the wallets we have watched since they first made the list.
+# Public summary in $PUBLIC/polymarket/traders.json, health in $PUBLIC/polymarket/status.json. Stamped whether or not it worked.
+if [ "$(date -u +%H%M)" -ge 0130 ] && { [ "$(cat "$DATA/.pmtraders.day" 2>/dev/null)" != "$day" ] || [ polymarket/traders.py -nt "$DATA/.pmtraders.day" ]; }; then
+  timeout 900 python3 polymarket/traders.py >"$DATA/pmtraders.log" 2>&1; echo "$day" > "$DATA/.pmtraders.day"
 fi
 
 # What is deployed (read by the TAS site and the weekly scorecard).

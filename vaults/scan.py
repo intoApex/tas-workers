@@ -15,10 +15,13 @@ Venues (all public endpoints, no login):
            (perp DEX strategy vaults; the venue publishes each vault's share price every 8 hours since launch)
   hibachi  https://data-api.hibachi.xyz/vault/info and /vault/performance   (perp DEX vaults; daily share price since launch)
   lagoon   https://app.lagoon.finance/api/vaults and /api/vault             (on-chain ERC-7540 vaults run by curators, many chains)
+  kamino-earn  https://api.kamino.finance/kvaults/vaults, /kvaults/vaults/metrics and /kvaults/vaults/<vault>/metrics/history
+           (Kamino Earn: vaults on Solana where a curator spreads one token across lending markets; the venue publishes each
+           vault's daily value per share, in the vault's own token, since launch)
   metric   https://api.metric.xyz/public/v1/evm/metadata                    (DEX pools whose pricing is run by a curator or market
            maker; Ethereum, BNB Chain, Robinhood Chain). A pool has no share token, so there is no share price to track:
            these rows carry Metric's own figures only and are published without a record of ours.
-Where the venue publishes a vault's share-price history (GRVT, Hibachi), the record is computed from that full history;
+Where the venue publishes a vault's share-price history (GRVT, Hibachi, Kamino Earn), the record is computed from that history;
 everywhere else it is computed from the daily share prices we save ourselves, so it starts on the day we started tracking.
 Those saved prices are the one thing here that cannot be fetched again, so for every venue whose records rest on them the
 whole history is also published as /srv/tas/public/vaults/<venue>-prices.json, which the site's nightly run copies off this
@@ -26,7 +29,7 @@ server, and days missing from the prices folder are written back from that file 
 before each scan. See common/pricebook.py.
 A venue that fails keeps yesterday's public file; the others still run.
 """
-import datetime as dt, gzip, json, os, sys, time, urllib.request
+import datetime as dt, gzip, json, os, sys, time, urllib.parse, urllib.request
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, REPO)
@@ -238,6 +241,63 @@ def lagoon():
                      "description": (dd.get("shortDescription") or dd.get("description") or "")[:300]})
     return {"vaults": listed, "details": details}, rows
 
+# Kamino Earn (Solana, 2026-11-13): a vault takes one token and a curator spreads it across Kamino's lending markets.
+# Three public routes, shapes checked against the live API on 2026-11-13 (intoApex/tradingagentstack scripts/probe_feeds.py):
+# the list (address, name, token, fees), every vault's metrics in pages of 100 (keyed by "kvault"), and one vault's daily history.
+KAMINO_EARN = "https://api.kamino.finance/kvaults/vaults"
+KAMINO_EARN_MIN = 250_000
+KAMINO_EARN_DAYS = 365
+# The vault's token, for the mints we are sure of. Any other vault is published without a token name, never with a guess.
+SOLANA_TOKENS = {"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC", "So11111111111111111111111111111111111111112": "SOL",
+                 "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT", "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo": "PYUSD",
+                 "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA": "USDS", "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH": "USDG"}
+
+def kamino_earn():
+    listed = get(KAMINO_EARN)
+    if not isinstance(listed, list) or len(listed) < 20:
+        raise RuntimeError(f"only {len(listed) if isinstance(listed, list) else 0} vaults listed")
+    metrics, token = {}, None
+    for _ in range(12):
+        d = get(KAMINO_EARN + "/metrics" + (f"?paginationToken={urllib.parse.quote(token)}" if token else ""))
+        for m in (d.get("result") or []) if isinstance(d, dict) else []:
+            if m.get("kvault"):
+                metrics[m["kvault"]] = m
+        token = d.get("paginationToken") if isinstance(d, dict) else None
+        if not token:
+            break
+        time.sleep(0.5)
+    if len(metrics) < len(listed) / 2:
+        raise RuntimeError(f"metrics for only {len(metrics)} of {len(listed)} vaults")
+    now = dt.datetime.utcnow()
+    span = f"start={(now - dt.timedelta(days=KAMINO_EARN_DAYS)).strftime('%Y-%m-%dT00:00:00.000Z')}&end={now.strftime('%Y-%m-%dT%H:%M:%S.000Z')}"
+    rows = []
+    for v in listed:
+        addr, st = v.get("address"), v.get("state") or {}
+        m = metrics.get(addr)
+        if not addr or not m:
+            continue
+        tvl = (num(m.get("tokensAvailableUsd")) or 0) + (num(m.get("tokensInvestedUsd")) or 0)
+        fee = lambda k: (st.get(k) / 10_000) if isinstance(st.get(k), (int, float)) else None
+        row = {"id": addr, "name": st.get("name") or addr[:8], "manager": None, "kind": "curated lending", "chain": "Solana",
+               "asset": SOLANA_TOKENS.get(st.get("tokenMint")), "address": addr, "url": f"https://explorer.solana.com/address/{addr}",
+               "tvl_usd": tvl,
+               # value of one share in the vault's own token (USDC, SOL...), so the record is what the vault earned in that token
+               "share_price": num(m.get("tokensPerShare")),
+               "venue_reported": {"apy_7d": num(m.get("apy7d")), "apy_30d": num(m.get("apy30d")), "apy_90d": num(m.get("apy90d")),
+                                  "holders": m.get("numberOfHolders") if isinstance(m.get("numberOfHolders"), int) else None,
+                                  "management_fee": fee("managementFeeBps"), "performance_fee": fee("performanceFeeBps")},
+               "description": ""}
+        if tvl >= KAMINO_EARN_MIN:
+            time.sleep(0.4)
+            try:
+                h = get(f"{KAMINO_EARN}/{addr}/metrics/history?{span}")
+                row["venue_history"] = daily([(iso_ts(x.get("timestamp")), num(x.get("tokensPerShare"))) for x in h if isinstance(x, dict) and iso_ts(x.get("timestamp"))])
+            except Exception:
+                pass   # no history today: the record falls back to the daily prices we save ourselves
+        rows.append(row)
+    return {"vaults": [{"address": v.get("address"), "name": (v.get("state") or {}).get("name"), "tokenMint": (v.get("state") or {}).get("tokenMint")} for v in listed],
+            "metrics": list(metrics.values())}, rows
+
 # On-chain strategy vaults (ERC-4626), read straight from the chain through public RPC endpoints.
 # The list (vaults/onchain_vaults.json) is the trading-type vaults tagged in Trading Strategy's open-source
 # web3-ethereum-defi (MIT), with the sources it cites.
@@ -389,7 +449,7 @@ def metric():
 
 VENUES = {"paradex": (paradex, 10_000), "orderly": (orderly, 10_000), "kamino": (kamino, 250_000),
           "grvt": (grvt, 10_000), "hibachi": (hibachi, 10_000), "lagoon": (lagoon, 100_000), "metric": (metric, 50_000),
-          "onchain": (onchain, 50_000)}
+          "onchain": (onchain, 50_000), "kamino-earn": (kamino_earn, KAMINO_EARN_MIN)}
 # D2 Finance is not in the daily run (2026-11-11). d2.finance puts a Cloudflare "verify you are human" page in front of the
 # whole site, the API and robots.txt included, so this server gets HTTP 403 every day. We do not get past bot checks, so
 # d2() stays here unused until D2 gives the scanner a way in (an allowlisted address or a data host without the check),
