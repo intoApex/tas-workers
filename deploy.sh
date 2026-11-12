@@ -49,6 +49,14 @@ if [ "$(date -u +%H%M)" -ge 0045 ] && { [ "$(cat "$DATA/.vaults.day" 2>/dev/null
   timeout 600 python3 vaults/scan.py >"$DATA/vaults.log" 2>&1; echo "$day" > "$DATA/.vaults.day"
 fi
 
+# Hyperliquid top traders (daily, after 01:15 UTC): the leaderboard's biggest 30-day winners, each wallet's record worked out
+# from Hyperliquid's own account history, and the wallets we have watched since they first made the list.
+# Public summary in $PUBLIC/hl/traders.json, health in $PUBLIC/hl/status.json. The day is stamped whether or not the run
+# worked, so a bad day is tried again tomorrow (or as soon as the script changes), not every ten minutes.
+if [ "$(date -u +%H%M)" -ge 0115 ] && { [ "$(cat "$DATA/.hltraders.day" 2>/dev/null)" != "$day" ] || [ hyperliquid/traders.py -nt "$DATA/.hltraders.day" ]; }; then
+  timeout 900 python3 hyperliquid/traders.py >"$DATA/hltraders.log" 2>&1; echo "$day" > "$DATA/.hltraders.day"
+fi
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
