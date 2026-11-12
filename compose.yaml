@@ -35,7 +35,7 @@ services:
       LAB_RUN_HOUR: "5"
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "12"
-      LAB_CODE_REV: "9"  # bump to restart the lab with new code; the lab then runs at once instead of waiting for the daily run
+      LAB_CODE_REV: "10"  # bump to run at once with new code. Since 2026-11-12 the lab loads new code by itself between runs; the bump is only for "run now"
     mem_limit: 2g
     cpus: 1.5
     logging:
@@ -58,7 +58,7 @@ services:
       LAB_RUN_HOUR: "4"  # 04:00 UTC since 2026-11-11 (was 21:00): an hour before the spot lab, same day's date as the site's fetch
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "6"
-      LAB_CODE_REV: "1"  # bump to restart the leverage board with new code; it then runs at once
+      LAB_CODE_REV: "2"  # bump to run at once with new code (new code alone is loaded by the lab itself between runs)
     mem_limit: 1500m
     cpus: 1.0
     logging:

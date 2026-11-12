@@ -11,13 +11,16 @@ A strategy that times out or is killed three runs in a row is retired, so one he
 Our own baselines (hold, moving-average cross, dip buying, breakout and a coin-flip control) live in baselines/.
 Raw data stays on the server; /public/strategy-lab/results.json holds the per-strategy results.
 """
-import ast, csv, datetime as dt, glob, hashlib, io, json, os, re, shutil, subprocess, time, urllib.request, zipfile
+import ast, csv, datetime as dt, glob, hashlib, io, json, os, re, shutil, subprocess, sys, time, urllib.request, zipfile
 
 # Two labs share this file, each in its own container with its own folders and results:
 # "spot" is the Strategy Lab; "futures" is the leverage board (Binance USDT perpetuals, isolated margin, shorting allowed).
 MODE = os.environ.get("LAB_MODE", "spot"); FUT = MODE == "futures"
 UD = "/freqtrade/user_data"
 CFG = "/app/config-futures.json" if FUT else "/app/config.json"
+# Added to the config for a strategy that sets market orders (see backtest()). Same folder as this file, so tests find it too.
+MARKET_CFG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "market-orders.json")
+MARKET_NOTE = 'market orders; run with price_side "other"'
 PUB = "/public/strategy-lab-futures" if FUT else "/public/strategy-lab"
 _OFFICIAL = "https://codeload.github.com/freqtrade/freqtrade-strategies/zip/refs/heads/main"
 SOURCES = [  # (label, zip url, path prefix inside the zip that holds strategies)
@@ -243,24 +246,42 @@ def marked_drawdown(s):
     except Exception as e:
         log("marked drawdown not worked out:", repr(e)[:200]); return None
 
-def backtest(name, start, tf=None):
-    code, out = sh(["freqtrade", "backtesting", "-c", CFG, "--userdir", UD, "--strategy", name,
-                    "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"]
+def refusal(out):
+    """Freqtrade's reason when it will not run a strategy with this config, or None.
+    It logs "Configuration error: ..." and then exits with code 0 (2026.10 sets no exit code for that case), so a zero
+    exit code alone does not mean a backtest ran. Until 2026-11-12 the lab took it to mean that, read the previous
+    strategy's result file, found no entry and published "ok" with every number empty: 18 bots, for three days."""
+    m = re.search(r"Configuration error: (.+)", out or "")
+    return m.group(1).strip() if m else None
+
+def wants_market(why):
+    """The refusal a strategy with market orders gets from a config priced for limit orders ("same" side of the book)."""
+    return bool(why) and why.startswith("Market ") and "price_side" in why
+
+def backtest(name, start, tf=None, market=False):
+    code, out = sh(["freqtrade", "backtesting", "-c", CFG] + (["-c", MARKET_CFG] if market else [])
+                   + ["--userdir", UD, "--strategy", name,
+                      "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"]
                    + (["--timeframe", tf] if tf else []), BT_TIMEOUT)
     if code == 124: return {"status": "timeout", "error": f"did not finish in {BT_TIMEOUT} seconds"}
     if code < 0: return {"status": "killed", "error": "stopped by the system, most likely for using too much memory"}
+    why = refusal(out)
+    if why:
+        # Its author chose market orders, so it is run with the pricing those need. A backtest fills at candle prices
+        # either way; the note travels with the result so the site can show the same extra config in "run it yourself".
+        if not market and wants_market(why): return backtest(name, start, tf, True)
+        return {"status": "error", "error": "Freqtrade will not run this strategy with the lab's settings: " + why}
     if code != 0:
         if not tf and "Timeframe needs to be set" in out:  # example strategies that leave the timeframe to the user
-            return dict(backtest(name, start, "5m"), timeframe_note="not set by the strategy; run on 5m")
+            return dict(backtest(name, start, "5m", market), timeframe_note="not set by the strategy; run on 5m")
         if not FUT and "can_short" in out:  # the spot lab lists futures-only strategies but does not run them
             return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
         return {"status": "error", "error": out[-600:]}
     s = parse_last_backtest()["strategy"].get(name)
-    if s is None:
-        # Freqtrade ended without an error code but the newest result file has no entry for this strategy, so what was
-        # read is another strategy's file. Until 2026-11-11 this came back as "ok" with every number empty: 18 bots sat on
-        # the site as running with no result, and would have stayed that way. It is an error, with the end of Freqtrade's
-        # output kept so the open data says why.
+    if not s:
+        # Freqtrade ended without an error code but the newest result file has nothing for this strategy, so what was
+        # read is another strategy's file (or an empty entry). It is an error, with the end of Freqtrade's output kept
+        # so the open data says why.
         return {"status": "error", "error": "the run ended without a result for this strategy. Last output: " + out[-500:]}
     trades = s.get("trades", [])
     extra = {"leverage": max([t.get("leverage") or 1 for t in trades] or [1]),
@@ -270,12 +291,14 @@ def backtest(name, start, tf=None):
             "profit_total": s.get("profit_total"), "profit_abs": s.get("profit_total_abs"),
             "max_drawdown": s.get("max_drawdown_account", s.get("max_relative_drawdown")), "max_drawdown_marked": marked_drawdown(s),
             "winrate": s.get("winrate"), "wins": s.get("wins"), "losses": s.get("losses"),
-            "market_change": s.get("market_change"), "start": s.get("backtest_start"), "end": s.get("backtest_end")}
+            "market_change": s.get("market_change"), "start": s.get("backtest_start"), "end": s.get("backtest_end"),
+            **({"orders_note": MARKET_NOTE} if market else {})}
 
-def lookahead(name, start):
+def lookahead(name, start, market=False):
     out_csv = "/tmp/lookahead.csv"
     if os.path.exists(out_csv): os.remove(out_csv)
-    code, out = sh(["freqtrade", "lookahead-analysis", "-c", CFG, "--userdir", UD, "--strategy", name,
+    code, out = sh(["freqtrade", "lookahead-analysis", "-c", CFG] + (["-c", MARKET_CFG] if market else [])
+                   + ["--userdir", UD, "--strategy", name,
                     "--timerange", start.strftime("%Y%m%d") + "-", "-p", *LA_PAIRS,
                     "--lookahead-analysis-exportfilename", out_csv], BT_TIMEOUT)
     if os.path.exists(out_csv):
@@ -316,7 +339,7 @@ def run_once():
                 and n in names and not meta.get("retired")):
             reg["running"] = n; save_json(REG, reg)
             meta["lookahead_tries"] = meta.get("lookahead_tries", 0) + 1
-            meta["lookahead_bias"] = lookahead(n, today - dt.timedelta(days=20)); meta["lookahead_checked"] = str(today); checked += 1
+            meta["lookahead_bias"] = lookahead(n, today - dt.timedelta(days=20), bool(meta.get("market_orders"))); meta["lookahead_checked"] = str(today); checked += 1
             reg["running"] = None; save_json(REG, reg)
             log("lookahead", n, meta["lookahead_bias"])
     results = []
@@ -330,11 +353,15 @@ def run_once():
             reg["running"] = n; save_json(REG, reg); t1 = time.time()
             # Labelled backtest on the last 45 days (published at once, never called a track record),
             # plus the live, out-of-sample record that grows every day from the day the strategy was added.
-            bt = backtest(n, today - dt.timedelta(days=BACKTEST_DAYS))
+            bt = backtest(n, today - dt.timedelta(days=BACKTEST_DAYS), market=bool(meta.get("market_orders")))
+            if bt.get("orders_note") and not meta.get("market_orders"):
+                # Remembered, so later runs skip the refused first attempt; its lookahead check was refused the same way
+                # and gets its tries back.
+                meta["market_orders"] = True; meta["lookahead_tries"] = 0
             r["backtest"] = dict(bt, days=BACKTEST_DAYS, label="backtest")
             r["status"] = bt.get("status")
             if days >= 1 and bt.get("status") == "ok":
-                r["live"] = dict(backtest(n, added), label="live since " + meta["added"])
+                r["live"] = dict(backtest(n, added, market=bool(meta.get("market_orders"))), label="live since " + meta["added"])
             bad = [x.get("status") for x in (bt, r.get("live") or {}) if x.get("status") in ("timeout", "killed")]
             if bad: strike(meta, bad[0])
             else: meta["strikes"] = 0
@@ -357,10 +384,30 @@ def run_once():
     open(os.path.join(UD, ".last_run_rev"), "w").write(CODE_REV)
     log("done", json.dumps(summary)[:400])
 
+def code_sig(path):
+    try: return hashlib.sha256(open(path, "rb").read()).hexdigest()
+    except OSError: return None
+
+def code_changed(path, loaded):
+    """True when the file on disk is not the code this process loaded, and is whole enough to compile.
+    The server pulls this repo every 10 minutes, but a running lab keeps the code it started with: the fix merged on
+    2026-11-11 (#16) never ran because nothing restarted the container. Now the lab restarts itself between runs when
+    its own file changes. It does not run at once for that; LAB_CODE_REV is still the way to ask for a run right away."""
+    try:
+        src = open(path, "rb").read()
+        if not loaded or hashlib.sha256(src).hexdigest() == loaded: return False
+        compile(src, path, "exec"); return True
+    except (OSError, SyntaxError, ValueError):
+        return False
+
 if __name__ == "__main__":
+    ME = os.path.abspath(__file__); LOADED = code_sig(ME)
     os.makedirs(PUB, exist_ok=True)
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
+        if code_changed(ME, LOADED):
+            log("new lab code on disk: restarting to load it")
+            os.execv(sys.executable, [sys.executable, "-u", ME])
         last = open(os.path.join(UD, ".last_run_v4")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v4")) else ""
         rev = open(os.path.join(UD, ".last_run_rev")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_rev")) else ""
         if due(last, rev, dt.datetime.utcnow()):
