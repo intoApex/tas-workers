@@ -269,6 +269,8 @@ def backtest(name, start, tf=None, market=False):
     if why:
         # Its author chose market orders, so it is run with the pricing those need. A backtest fills at candle prices
         # either way; the note travels with the result so the site can show the same extra config in "run it yourself".
+        # Of the 18 strategies this hid, 15 set market orders (13 in their own class, 2 through a parent class), one
+        # sets a stoploss of 0, and two were not explained by reading their files: their reason is in the next run's data.
         if not market and wants_market(why): return backtest(name, start, tf, True)
         return {"status": "error", "error": "Freqtrade will not run this strategy with the lab's settings: " + why}
     if code != 0:
