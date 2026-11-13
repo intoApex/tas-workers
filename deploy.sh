@@ -64,6 +64,14 @@ if [ "$(date -u +%H%M)" -ge 0130 ] && { [ "$(cat "$DATA/.pmtraders.day" 2>/dev/n
   timeout 900 python3 polymarket/traders.py >"$DATA/pmtraders.log" 2>&1; echo "$day" > "$DATA/.pmtraders.day"
 fi
 
+# Bybit's recommended copy traders (daily, after 01:45 UTC): the short list Bybit recommends for Classic copy trading, with
+# Bybit's own 30-day figures, our worst drop from its ROI curve when that curve can be read, and each trader's record since
+# we first saw them. No key. Bybit refuses US servers, so this can only run here. Public summary in $PUBLIC/bybit/traders.json,
+# health and number formats in $PUBLIC/bybit/status.json. Stamped whether or not it worked; reruns when the script changes.
+if [ "$(date -u +%H%M)" -ge 0145 ] && { [ "$(cat "$DATA/.bybittraders.day" 2>/dev/null)" != "$day" ] || [ bybit/traders.py -nt "$DATA/.bybittraders.day" ]; }; then
+  timeout 300 python3 bybit/traders.py >"$DATA/bybittraders.log" 2>&1; echo "$day" > "$DATA/.bybittraders.day"
+fi
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
