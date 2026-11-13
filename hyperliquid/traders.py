@@ -169,11 +169,16 @@ def record(portfolio, btc_close, now_ms, seen_ms=None):
 
     b0, b1 = btc_at(t_from), btc_at(t_to)
     big = max(abs(r) for _, _, r in combined)
+    # what this address's own history says in dollars, to hold against the leaderboard row (see covers)
+    own_pnl = pnl_m[-1][1] - pnl_m[0][1] if len(pnl_m) > 1 else None
+    own_value = av_m[-1][1] if av_m else av_all[-1][1] if av_all else None
     rec = {"window_from": day_of(t_from), "window_to": day_of(t_to), "days": round((t_to - t_from) / DAY),
            "return": round(ret, 4), "btc_return": round(b1 / b0 - 1, 4) if b0 and b1 else None, "max_drawdown": round(mdd, 4),
            "sortino": round(sortino, 2) if sortino is not None else None,
            "return_30d": round(r30, 4) if r30 is not None else None, "worst_day_30d": round(worst, 4) if worst is not None else None,
-           "flags": ["large_single_step"] if big > 0.5 else [], "steps": len(combined)}
+           "flags": ["large_single_step"] if big > 0.5 else [], "steps": len(combined),
+           "own_pnl_30d_usd": round(own_pnl) if own_pnl is not None else None,
+           "own_account_value_usd": round(own_value) if own_value is not None else None}
     since = None
     if seen_ms is not None:
         after = [s for s in combined if s[0] >= seen_ms - DAY // 2]
@@ -183,6 +188,18 @@ def record(portfolio, btc_close, now_ms, seen_ms=None):
             since = {"from": day_of(after[0][0]), "to": day_of(after[-1][1]), "return": round(r, 4), "max_drawdown": round(d, 4),
                      "btc_return": round(sb1 / sb0 - 1, 4) if sb0 and sb1 else None}
     return rec, since
+
+
+def covers(board_pnl_30d, own_pnl_30d):
+    """Is the leaderboard's 30-day profit in this address's own history? True, False, or None when it can't be told.
+    First real run, 2026-11-13: for about a quarter of the list the leaderboard row was many times what the address's own
+    portfolio history showed (one: $6.1M account and $4.7M 30-day profit on the board, $83k and a small loss in its own history;
+    55 times the volume). The leaderboard most likely adds sub-accounts, and an address's portfolio history does not. A record
+    worked out from that history describes the wrong account, so the site lists such a wallet without rating it.
+    Covered means the address's own 30-day profit is between half and twice the leaderboard's."""
+    if board_pnl_30d is None or own_pnl_30d is None or board_pnl_30d <= 0:
+        return None
+    return 0.5 * board_pnl_30d <= own_pnl_30d <= 2 * board_pnl_30d
 
 
 # ---------- files ----------
@@ -241,6 +258,11 @@ def run(now=None):
         try:
             pf = post({"type": "portfolio", "user": addr})
             row["record"], row["since_seen"] = record(pf, btc_close, now_ms, ms_of(w["first_seen"]))
+            if row["record"]:
+                c = covers(r.get("pnl_30d"), row["record"]["own_pnl_30d_usd"]) if r else None
+                if c is not None:
+                    w["covers"] = c          # remembered, so a wallet that drops off the list keeps the answer it had on it
+                row["record"]["covers"] = w.get("covers")
         except Exception as e:
             failed += 1
             print(f"{addr}: {e}", file=sys.stderr, flush=True)
@@ -256,16 +278,19 @@ def run(now=None):
         rec = t["record"]
         t["status"] = ("no_history" if not rec else "short_history" if rec["days"] < MIN_HISTORY_DAYS
                        else "high_drawdown" if rec["max_drawdown"] < -DD_GATE else "held")
-    full = [t for t in rated if t["status"] in ("held", "high_drawdown")]
+    not_covered = [t for t in rated if t["status"] in ("held", "high_drawdown") and t["record"].get("covers") is False]
+    full = [t for t in rated if t["status"] in ("held", "high_drawdown") and t not in not_covered]
     rets = sorted(t["record"]["return"] for t in full)
     out = {"name": "TradingAgentStack: Hyperliquid top traders, checked", "as_of": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "day": day,
            "rules": {"top_n": TOP_N, "ranked_by": "30-day profit in dollars, from Hyperliquid's leaderboard", "min_account_usd": MIN_ACCOUNT,
                      "window_days": WINDOW_DAYS, "min_capital_usd": MIN_CAPITAL, "min_history_days": MIN_HISTORY_DAYS, "drawdown_gate": DD_GATE,
-                     "watch_days": WATCH_DAYS},
+                     "watch_days": WATCH_DAYS,
+                     "covers": "record.covers says whether the leaderboard's 30-day profit is in the address's own history: its own 30-day profit is between "
+                               "half and twice the leaderboard's. False most likely means sub-accounts; such a wallet is listed and not rated."},
            "sources": {"leaderboard": BOARD, "api": API, "wallet_history": "info request of type portfolio, one per wallet"},
            "board": {"listed": len(rows), "eligible": len(cands)},
            "summary": {"rated": len(rated), "with_history": len(full), "held": sum(1 for t in full if t["status"] == "held"),
-                       "high_drawdown": sum(1 for t in full if t["status"] == "high_drawdown"),
+                       "high_drawdown": sum(1 for t in full if t["status"] == "high_drawdown"), "not_covered": len(not_covered),
                        "median_return": rets[len(rets) // 2] if rets else None,
                        "watching_since": min((w["first_seen"] for w in watch.values()), default=day), "off_the_list": len(watched)},
            "traders": traders, "watched": watched}
