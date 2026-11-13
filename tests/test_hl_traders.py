@@ -74,6 +74,9 @@ def fake_post(body, tries=4):
 
 hlt.get, hlt.post = fake_get, fake_post
 jl = lambda p: json.load(open(p))
+# The stand-in board's dollar figures above are not tied to the stand-in histories, so the check that holds one against the other
+# (covers) is switched off for the runs below and tested on its own at the end.
+real_covers, hlt.covers = hlt.covers, lambda board, own: True if board is not None and own is not None else None
 
 # ---------- day one ----------
 st = hlt.run(NOW)
@@ -140,6 +143,39 @@ check("rows with none of the expected fields fail the run too", rc == 1 and "unr
 BOARDS[2] = [row(A["steady"], 300_000, 45_000), row(A["late"], 700_000, 60_000)]
 rc = hlt.main()
 check("a bare list of rows is read as well", rc == 0 and jl(tmp + "/public/status.json")["ok"] is True, jl(tmp + "/public/status.json"))
+
+# ---------- is the leaderboard's profit in the address's own history? ----------
+hlt.covers = real_covers
+check("covered: the address's own 30-day profit is between half and twice the leaderboard's",
+      real_covers(100_000, 100_000) is True and real_covers(100_000, 50_000) is True and real_covers(100_000, 200_000) is True)
+check("not covered: its own history made under half of it, lost money, or made more than twice",
+      real_covers(4_700_000, -12_000) is False and real_covers(100_000, 49_999) is False and real_covers(100_000, 200_001) is False)
+check("can't be told: no leaderboard profit, no own figure, or a leaderboard loss",
+      real_covers(None, 5) is None and real_covers(5, None) is None and real_covers(-80_000, -80_000) is None and real_covers(0, 0) is None)
+own = lambda a: float(PORT[a][2][1]["pnlHistory"][-1][1]) - float(PORT[a][2][1]["pnlHistory"][0][1])   # the month window's own profit
+shutil.rmtree(tmp + "/data", ignore_errors=True)
+A["subs"] = "0x" + "5b" * 20
+PORT[A["subs"]] = history([0.0005] * 120, start_value=120_000.0)      # the address itself barely moves; the board row below is 50 times its profit
+BOARDS[3] = {"leaderboardRows": [row(A["subs"], 6_000_000, own(A["subs"]) * 50), row(A["steady"], 300_000, own(A["steady"]), name="Steady"),
+                                 row(A["late"], 700_000, own(A["late"]) * 0.9)]}
+which["n"] = 3
+st4 = hlt.run(NOW)
+d4 = jl(tmp + "/public/traders.json")
+t4 = {x["address"]: x for x in d4["traders"]}
+check("the record carries the address's own 30-day profit and account value", abs(t4[A["steady"]]["record"]["own_pnl_30d_usd"] - own(A["steady"])) <= 1
+      and t4[A["steady"]]["record"]["own_account_value_usd"] > 200_000, t4[A["steady"]]["record"])
+check("a wallet whose own history matches its leaderboard row is covered", t4[A["steady"]]["record"]["covers"] is True)
+check("a wallet whose leaderboard row is 50 times its own history is not covered", t4[A["subs"]]["record"]["covers"] is False, t4[A["subs"]]["record"])
+check("it keeps its held or high-drawdown status, so an older site still reads the file", t4[A["subs"]]["status"] in ("held", "high_drawdown"))
+check("the summary leaves it out of the rated counts and says how many there are",
+      d4["summary"]["not_covered"] == 1 and d4["summary"]["with_history"] == d4["summary"]["held"] + d4["summary"]["high_drawdown"]
+      and d4["summary"]["with_history"] == sum(1 for x in d4["traders"] if x["status"] in ("held", "high_drawdown")) - 1, d4["summary"])
+check("the rule is written into the file", "half and twice" in d4["rules"]["covers"])
+BOARDS[4] = {"leaderboardRows": [row(A["steady"], 300_000, own(A["steady"]), name="Steady"), row(A["new"], 160_000, 20_000), row(A["late"], 700_000, own(A["late"]))]}
+which["n"] = 4
+hlt.run(NOW2)
+w5 = {x["address"]: x for x in jl(tmp + "/public/traders.json")["watched"]}
+check("off the list, a wallet keeps the answer it had while it was on it", A["subs"] in w5 and w5[A["subs"]]["record"]["covers"] is False, w5.get(A["subs"], {}).get("record"))
 
 shutil.rmtree(tmp, ignore_errors=True)
 print("ALL OK" if ok else "FAILED")
