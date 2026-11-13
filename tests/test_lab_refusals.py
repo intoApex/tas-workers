@@ -85,5 +85,6 @@ check("a half-written file is left alone until it is whole", lab.code_changed(f,
 check("a missing file or an unknown starting point: no restart", lab.code_changed(os.path.join(d, "gone.py"), sig) is False and lab.code_changed(f, None) is False)
 
 src = open(os.path.join(REPO, "strategy-lab", "lab.py")).read()
-check("the lab checks for new code between runs, before deciding whether a run is due", src.index("if code_changed(ME, LOADED)") < src.index("if due(last, rev, dt.datetime.utcnow())"))
+check("the lab checks for new code between runs, before deciding whether a run is due", src.index("if any(code_changed(p, sig) for p, sig in LOADED.items())") < src.index("if due(last, rev, dt.datetime.utcnow())"))
+check("the reader of what is inside each bot is watched too, so a change to it is loaded", '"inside.py")' in src[src.index("LOADED = {"):src.index("LOADED = {") + 200])
 print("\nALL OK" if ok else "\nFAILED"); sys.exit(0 if ok else 1)
