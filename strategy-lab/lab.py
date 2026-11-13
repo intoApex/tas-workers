@@ -194,6 +194,16 @@ def class_files():
         for c in re.findall(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", open(f, errors="ignore").read(), re.M): m[c] = os.path.basename(f)
     return m
 
+def inside_of(fname, name):
+    """What the strategy's code contains, read from the frozen file without running it (inside.py). Never stops a run."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path: sys.path.insert(0, here)
+        import inside
+        return inside.describe(open(os.path.join(UD, "strategies", fname), errors="ignore").read(), name)
+    except Exception as e:
+        return {"error": repr(e)[:200]}
+
 def parse_last_backtest():
     last = json.load(open(os.path.join(UD, "backtest_results", ".last_result.json")))["latest_backtest"]
     path = os.path.join(UD, "backtest_results", last)
@@ -349,6 +359,7 @@ def run_once():
         added = dt.date.fromisoformat(meta["added"]); days = (today - added).days
         r = {"strategy": n, "source": meta.get("source"), "added": meta["added"], "days_live": days, "lookahead_bias": meta.get("lookahead_bias"),
              "code_sha256": hashes.get(meta.get("file") or "")}
+        if meta.get("file"): r["inside"] = inside_of(meta["file"], n)
         if n not in names: r.update(status="not_loadable")
         elif meta.get("retired"): r.update(status="retired", error=meta["retired"])
         else:
@@ -377,6 +388,7 @@ def run_once():
                "pinned_sources": len(reg.get("pinned_done", [])), "not_admitted": len(reg.get("rejected", {})),
                "lookahead_flagged": sum(r.get("lookahead_bias") is True for r in results),
                "lookahead_checked": sum(r.get("lookahead_bias") is not None for r in results),
+               "inside_read": sum(bool((r.get("inside") or {}).get("sentence")) for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
                "mode": MODE, "method": ("Leverage board. Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance USDT perpetual futures, 20 pairs, isolated margin, $1,000 paper wallet, 5 open trades, exchange fees and funding fees included, liquidations as the exchange's published margin tiers would trigger them. Shorting is allowed. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Never ranked together with the spot Strategy Lab." if FUT else "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Spot only: no leverage, no shorting. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Community collections are pinned to one commit, and a file is admitted only if a read of its code shows it imports nothing but the libraries a strategy needs. A strategy that cannot finish three runs in a row is retired. Strategies flagged by Freqtrade's lookahead analysis are marked.")}
     save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
@@ -403,11 +415,13 @@ def code_changed(path, loaded):
         return False
 
 if __name__ == "__main__":
-    ME = os.path.abspath(__file__); LOADED = code_sig(ME)
+    ME = os.path.abspath(__file__)
+    # the lab's own files: a change to any of them restarts it between runs (inside.py is imported once and would stay stale)
+    LOADED = {p: code_sig(p) for p in (ME, os.path.join(os.path.dirname(ME), "inside.py"))}
     os.makedirs(PUB, exist_ok=True)
     sh(["freqtrade", "create-userdir", "--userdir", UD], 120)
     while True:
-        if code_changed(ME, LOADED):
+        if any(code_changed(p, sig) for p, sig in LOADED.items()):
             log("new lab code on disk: restarting to load it")
             os.execv(sys.executable, [sys.executable, "-u", ME])
         last = open(os.path.join(UD, ".last_run_v4")).read().strip() if os.path.exists(os.path.join(UD, ".last_run_v4")) else ""
