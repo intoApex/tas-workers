@@ -64,3 +64,26 @@ services:
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "2"}
+
+  # The runner's signal hub (runner/hub.py, 2026-11-14): live paper copies of the Strategy Lab bots in runner/strategies.json,
+  # every fill published at /runner/signals.json. Paper money, no keys. OFF until the "runner" profile is enabled
+  # (COMPOSE_PROFILES=runner): each copy needs about 250 MB and the two labs already use up to 3.5 GB of this 4 GB server
+  # between 04:00 and 06:00 UTC. Resize the server first. See runner/DESIGN.md.
+  runner-signals:
+    profiles: ["runner"]
+    image: freqtradeorg/freqtrade:stable
+    restart: unless-stopped
+    user: "0:0"
+    entrypoint: ["python", "-u", "/app/hub.py"]
+    volumes:
+      - ./runner:/app:ro
+      - ./strategy-lab:/labcfg:ro                               # the lab's config.json and market-orders.json
+      - /srv/tas/data/strategy-lab:/lab:ro                       # the lab's frozen strategy files and registry
+      - /srv/tas/public/strategy-lab:/labpub:ro                  # the lab's results.json (which bots run today)
+      - /srv/tas/data/runner:/freqtrade/user_data
+      - /srv/tas/public/runner:/public/runner
+    mem_limit: 1g
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "2"}
