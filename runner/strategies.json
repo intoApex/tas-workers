@@ -1,0 +1,8 @@
+{
+  "_about": "Strategy Lab bots the runner offers. The hub runs a live paper copy of each one (runner/hub.py). Start small: each copy is its own Freqtrade process (about 250 MB). Pick from the lab's best live records, one per family (tradingagentstack.com/run/). A name must be a bot the lab runs today; anything else is listed under 'refused' in runner/status.json.",
+  "strategies": [
+    {"name": "ClucHAnix_5m", "why": "best live record on Nov 14 (Cluc family, dip buying on 5-minute candles)"},
+    {"name": "UniversalMACD", "why": "a trend follower, 7 days of record on Nov 14"},
+    {"name": "KC_BB", "why": "second-best family on Nov 14 (Keltner and Bollinger bands)"}
+  ]
+}
