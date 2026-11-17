@@ -72,6 +72,14 @@ if [ "$(date -u +%H%M)" -ge 0145 ] && { [ "$(cat "$DATA/.bybittraders.day" 2>/de
   timeout 300 python3 bybit/traders.py >"$DATA/bybittraders.log" 2>&1; echo "$day" > "$DATA/.bybittraders.day"
 fi
 
+# Funding rates and the delta-neutral carry (daily, after 02:00 UTC): each venue's public funding history for the biggest
+# coins (Hyperliquid, Binance, Bybit, dYdX), kept on the server and topped up daily; the first run reads a year. Public summary
+# in $PUBLIC/funding/carry.json, health in $PUBLIC/funding/status.json. Binance and Bybit refuse US servers, so it runs here.
+# Stamped whether or not it worked; reruns when the script changes.
+if [ "$(date -u +%H%M)" -ge 0200 ] && { [ "$(cat "$DATA/.funding.day" 2>/dev/null)" != "$day" ] || [ funding/carry.py -nt "$DATA/.funding.day" ]; }; then
+  timeout 1800 python3 funding/carry.py >"$DATA/funding.log" 2>&1; echo "$day" > "$DATA/.funding.day"
+fi
+
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
   --arg at "$(date -u +%FT%TZ)" \
