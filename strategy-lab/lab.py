@@ -186,7 +186,8 @@ def fetch_sources(reg_files):
 def list_strategies():
     code, out = sh(["freqtrade", "list-strategies", "-c", CFG, "--userdir", UD, "-1"], 300)
     names = [l.strip() for l in out.splitlines() if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", l.strip())]
-    return names, (None if code == 0 else out[-800:])
+    if code != 0: log("list-strategies failed", out[-800:])
+    return names, (None if code == 0 else ("list-strategies failed: " + (short_error(out) or "no error line in its output")))
 
 def class_files():
     m = {}
@@ -264,6 +265,19 @@ def refusal(out):
     m = re.search(r"Configuration error: (.+)", out or "")
     return m.group(1).strip() if m else None
 
+def short_error(out):
+    """What went wrong, in one line, for the open data: the exception Python ended with, or else Freqtrade's last ERROR
+    line, with file paths cut to the file name. Until 2026-11-19 the last 600 characters of Freqtrade's output were
+    published as they were: a Python traceback with the runner's paths. The full output stays in the server's log."""
+    lines = [l.strip() for l in (out or "").splitlines() if l.strip()]
+    pick = next((l for l in reversed(lines) if re.match(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b", l)), None)
+    if pick is None:
+        pick = next((m.group(1) for m in (re.search(r" - ERROR - (.+)", l) for l in reversed(lines)) if m), None)
+    if not pick:
+        return None
+    pick = re.sub(r"(?:[A-Za-z]:)?(?:[/\\][\w.\-]+)+[/\\]([\w.\-]+)", r"\1", pick)
+    return pick[:240]
+
 def wants_market(why):
     """The refusal a strategy with market orders gets from a config priced for limit orders ("same" side of the book)."""
     return bool(why) and why.startswith("Market ") and "price_side" in why
@@ -288,13 +302,16 @@ def backtest(name, start, tf=None, market=False):
             return dict(backtest(name, start, "5m", market), timeframe_note="not set by the strategy; run on 5m")
         if not FUT and "can_short" in out:  # the spot lab lists futures-only strategies but does not run them
             return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
-        return {"status": "error", "error": out[-600:]}
+        log("backtest error", name, out[-600:])
+        return {"status": "error", "error": "Freqtrade stopped on this strategy: " + (short_error(out) or "no error line in its output")}
     s = parse_last_backtest()["strategy"].get(name)
     if not s:
         # Freqtrade ended without an error code but the newest result file has nothing for this strategy, so what was
         # read is another strategy's file (or an empty entry). It is an error, with the end of Freqtrade's output kept
         # so the open data says why.
-        return {"status": "error", "error": "the run ended without a result for this strategy. Last output: " + out[-500:]}
+        log("no result", name, out[-500:])
+        e = short_error(out)
+        return {"status": "error", "error": "the run ended without a result for this strategy" + (f". Last error: {e}" if e else "")}
     trades = s.get("trades", [])
     extra = {"leverage": max([t.get("leverage") or 1 for t in trades] or [1]),
              "liquidations": sum(1 for t in trades if t.get("exit_reason") == "liquidation"),
@@ -339,7 +356,8 @@ def run_once():
             f = cf.get(n, ""); reg["strategies"][n] = {"added": str(today), "file": f, "source": reg["files"].get(f, ""), "lookahead_bias": None}
     save_json(REG, reg)
     code, out = sh(["freqtrade", "download-data", "-c", CFG, "--userdir", UD, "--timeframes", *TFS, "--days", "60"], 3600)
-    dl_err = None if code == 0 else out[-600:]
+    if code != 0: log("download-data failed", out[-600:])
+    dl_err = None if code == 0 else ("download-data failed: " + (short_error(out) or "no error line in its output"))
     deep = os.path.join(UD, ".deep_history_v1")
     if not os.path.exists(deep):  # once: long history on the slow timeframes, so strategies with long indicators get real values
         code, out = sh(["freqtrade", "download-data", "-c", CFG, "--userdir", UD, "--timeframes", "1h", "4h", "1d", "--days", "900", "--prepend"], 3600)
