@@ -65,6 +65,25 @@ check("code 0 and an empty entry: an error too", r["status"] == "error", r)
 r, calls, reads = run([(2, "Timeframe needs to be set in either configuration or as cli argument"), (0, MARKET), (0, "ran fine")], {"Bot": GOOD})
 check("timeframe retry and market retry work together", r["status"] == "ok" and r.get("timeframe_note") and r.get("orders_note") and "--timeframe" in calls[2] and lab.MARKET_CFG in calls[2], (r, calls))
 
+# 2026-11-19: a strategy that crashes publishes one line, not the last 600 characters of a Python traceback with the runner's paths
+TB = ("2026-11-19 03:10:22,123 - freqtrade - ERROR - Fatal exception!\nTraceback (most recent call last):\n"
+      '  File "/freqtrade/user_data/strategies/collection__Bot.py", line 48, in SSLChannels\n'
+      "    np.where(df['close'] < df['smaLow'], -1, np.NAN))\n                                             ^^^^^^\n"
+      '  File "/home/ftuser/.local/lib/python3.14/site-packages/numpy/__init__.py", line 795, in __getattr__\n'
+      '    raise AttributeError(f"module {__name__!r} has no attribute {attr!r}")\n'
+      "AttributeError: module 'numpy' has no attribute 'NAN'. Did you mean: 'nan'?\n")
+lab.log = lambda *a: None
+r, calls, reads = run([(2, TB)], {"Bot": GOOD})
+check("a crash publishes the exception in one line", r["status"] == "error" and r["error"].endswith("AttributeError: module 'numpy' has no attribute 'NAN'. Did you mean: 'nan'?"), r)
+check("no traceback, no paths and no source lines in it", "\n" not in r["error"] and "File \"" not in r["error"] and "/home/" not in r["error"] and "np.where" not in r["error"], r["error"])
+check("Freqtrade's own ERROR line is used when there is no exception line",
+      lab.short_error("x - freqtrade - ERROR - Impossible to load Strategy 'Bot'. This class does not exist or contains Python code errors.\n")
+      == "Impossible to load Strategy 'Bot'. This class does not exist or contains Python code errors.")
+check("a path inside the message keeps only the file name", lab.short_error("OSError: cannot open /freqtrade/user_data/data/x.feather") == "OSError: cannot open x.feather")
+check("nothing readable: says so instead of pasting output", lab.short_error("") is None and lab.short_error("just some log text") is None)
+r, calls, reads = run([(0, TB)], {"Other": GOOD})
+check("no result after a crash: one line too", r["status"] == "error" and "without a result" in r["error"] and "\n" not in r["error"] and "AttributeError" in r["error"], r)
+
 r, calls, reads = run([(124, "")], {"Bot": GOOD})
 check("a timeout is still a timeout", r["status"] == "timeout")
 
