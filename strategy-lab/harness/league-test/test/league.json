@@ -1,0 +1,15 @@
+{
+ "season": "test",
+ "title": "Offline test season",
+ "days": 30,
+ "leverage_cap": 3.0,
+ "retire_drawdown": 0.30,
+ "bots": [
+  {"lab": "Good Lab", "model": "Good 1", "model_id": "test/good-1", "class": "TASLeagueTestGood", "file": "good.py"},
+  {"lab": "Lever Lab", "model": "Lever 1", "model_id": "test/lever-1", "class": "TASLeagueTestLever", "file": "lever.py"},
+  {"lab": "Import Lab", "model": "Import 1", "model_id": "test/import-1", "class": "TASLeagueTestImport", "file": "bad_import.py"},
+  {"lab": "Crash Lab", "model": "Crash 1", "model_id": "test/crash-1", "class": "TASLeagueTestCrash", "file": "crash.py"},
+  {"lab": "Named Lab", "model": "Named 1", "model_id": "test/named-1", "class": "TASLeagueTestNamed", "file": "named.py"},
+  {"lab": "Silent Lab", "model": "Silent 1", "model_id": "test/silent-1", "class": "TASLeagueTestSilent", "file": null, "note": "the answer had no Python code block"}
+ ]
+}

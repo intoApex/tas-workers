@@ -45,7 +45,9 @@ services:
   # The leverage board: the same runner in futures mode (Binance USDT perpetuals, isolated margin, shorting allowed),
   # with its own data, registry and results. Never ranked together with the spot lab.
   strategy-lab-futures:
-    image: freqtradeorg/freqtrade:stable
+    # Pinned on 2026-11-22 (was :stable) for the AI league: its bots are written for Freqtrade 2026.10 and must run on the
+    # same version for their whole season. Move it only between seasons, and say so on the league page.
+    image: freqtradeorg/freqtrade:2026.10
     restart: unless-stopped
     user: "0:0"
     entrypoint: ["python", "-u", "/app/lab.py"]
