@@ -76,4 +76,10 @@ check("and leaves 2x as it is", bot.leverage(**kw) == 2.0)
 check("everything else is the model's own code", bot.populate_indicators(None, None) == "mine" and type(bot).__mro__[1].__name__ == "MyBot")
 check("the model's file is not touched", "lev = 10.0" in open(model).read() and "min(" not in open(model).read())
 
+# 6. the prompt's import list is stricter than the board's: random, ta, numba and arrow are refused for league bots
+check("random is refused for a league bot", lab.league_imports_outside("import random\nimport numpy as np\n") == ["random"])
+check("ta and arrow too", lab.league_imports_outside("import ta\nfrom arrow import now\n") == ["arrow", "ta"])
+check("the allowed ones pass", lab.league_imports_outside("import talib.abstract as ta\nimport pandas_ta\nfrom datetime import datetime\n"
+                                                          "from freqtrade.strategy import IStrategy, informative\nfrom technical import qtpylib\n") == [])
+
 print("FAILURES:", 0 if ok else "see above"); sys.exit(0 if ok else 1)

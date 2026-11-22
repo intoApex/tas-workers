@@ -74,6 +74,19 @@ BASELINES = os.environ.get("LAB_BASELINES", "/app/baselines-futures" if FUT else
 # League bots are never ranked on the board: they get their own table in results.json ("league").
 LEAGUE_DIR = os.environ.get("LAB_LEAGUE", "/app/league") if FUT else ""
 LEAGUE_PREFIX = "tasleague_"
+# The imports the league's prompt allows, stricter than admit(): only what Freqtrade 2026.10 installs (no ta, numba or
+# arrow) and no random (the record is replayed from the start every day, so a random bot's past would change).
+LEAGUE_IMPORTS = {"freqtrade", "pandas", "numpy", "talib", "pandas_ta", "technical", "scipy", "cachetools", "dateutil", "pytz",
+                  "__future__", "abc", "collections", "copy", "dataclasses", "datetime", "decimal", "enum", "functools", "hashlib",
+                  "itertools", "json", "logging", "math", "operator", "re", "statistics", "time", "typing", "warnings"}
+
+def league_imports_outside(src):
+    """The top-level modules a league file imports that its prompt did not allow, sorted."""
+    bad = set()
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.Import): bad |= {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom) and not n.level: bad.add((n.module or "").split(".")[0])
+    return sorted(bad - LEAGUE_IMPORTS)
 
 def log(*a): print(dt.datetime.utcnow().strftime("%H:%M:%S"), *a, flush=True)
 
@@ -408,6 +421,8 @@ def install_league(reg):
             why, found = admit(open(dest, errors="ignore").read())
             model_class = cls if cls in found else (found[0] if len(found) == 1 else None)
             if why: why = "the lab's checker refused the file: it " + why
+            elif league_imports_outside(open(dest, errors="ignore").read()):
+                why = "it imports " + ", ".join(league_imports_outside(open(dest, errors="ignore").read())) + ", which the prompt did not allow"
             elif not model_class: why = f"no class named {cls}, and {len(found)} other strategy classes to choose from"
             else: why = league_load_error(dest)  # loaded once on its own first, so a file that hangs or crashes cannot stall the board's listing
             if why:
