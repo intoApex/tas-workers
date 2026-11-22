@@ -17,7 +17,8 @@ spec = importlib.util.spec_from_file_location("lab", os.path.join(here, "..", "l
 lab.UD = root + "/user_data"; lab.REG = lab.UD + "/registry.json"  # LAB_MODE=futures runs the leverage board instead
 lab.CFG = os.path.join(here, "..", "config-futures.json" if lab.FUT else "config.json")
 lab.PUB = root + ("/public/strategy-lab-futures" if lab.FUT else "/public/strategy-lab")
-lab.BASELINES = os.path.join(here, "..", "baselines-futures" if lab.FUT else "baselines")
+lab.BASELINES = os.environ.get("BASELINES") or os.path.join(here, "..", "baselines-futures" if lab.FUT else "baselines")
+lab.LEAGUE_DIR = (os.environ.get("LEAGUE") or os.path.join(here, "league-test")) if lab.FUT else ""  # AI league test season (2026-11-22)
 SHA = "0123456789abcdef0123456789abcdef01234567"
 lab.PINNED = [("tas-test/pinned-a", SHA, ("strategies/", "helper/", "tests/"), ())]
 lab.BT_TIMEOUT = int(os.environ.get("T", "40")); lab.LOOKAHEAD_PER_DAY = int(os.environ.get("LA", "2"))

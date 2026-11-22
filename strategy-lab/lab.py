@@ -68,6 +68,25 @@ BACKTEST_DAYS = int(os.environ.get("LAB_BACKTEST_DAYS", "45"))
 LOOKAHEAD_PER_DAY = int(os.environ.get("LAB_LOOKAHEAD_PER_DAY", "6"))
 REG = os.path.join(UD, "registry.json")
 BASELINES = os.environ.get("LAB_BASELINES", "/app/baselines-futures" if FUT else "/app/baselines")
+# AI league (2026-11-22): bots written by AI models from one prompt, each frozen exactly as it came in league/<season>/,
+# with a league.json naming the lab, model, class and file of each. Leverage board only. Each bot runs through a wrapper
+# file the lab writes (tasleague_*.py) that loads the model's file unchanged and cuts leverage to the season's cap.
+# League bots are never ranked on the board: they get their own table in results.json ("league").
+LEAGUE_DIR = os.environ.get("LAB_LEAGUE", "/app/league") if FUT else ""
+LEAGUE_PREFIX = "tasleague_"
+# The imports the league's prompt allows, stricter than admit(): only what Freqtrade 2026.10 installs (no ta, numba or
+# arrow) and no random (the record is replayed from the start every day, so a random bot's past would change).
+LEAGUE_IMPORTS = {"freqtrade", "pandas", "numpy", "talib", "pandas_ta", "technical", "scipy", "cachetools", "dateutil", "pytz",
+                  "__future__", "abc", "collections", "copy", "dataclasses", "datetime", "decimal", "enum", "functools", "hashlib",
+                  "itertools", "json", "logging", "math", "operator", "re", "statistics", "time", "typing", "warnings"}
+
+def league_imports_outside(src):
+    """The top-level modules a league file imports that its prompt did not allow, sorted."""
+    bad = set()
+    for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.Import): bad |= {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom) and not n.level: bad.add((n.module or "").split(".")[0])
+    return sorted(bad - LEAGUE_IMPORTS)
 
 def log(*a): print(dt.datetime.utcnow().strftime("%H:%M:%S"), *a, flush=True)
 
@@ -201,7 +220,8 @@ def inside_of(fname, name):
         here = os.path.dirname(os.path.abspath(__file__))
         if here not in sys.path: sys.path.insert(0, here)
         import inside
-        return inside.describe(open(os.path.join(UD, "strategies", fname), errors="ignore").read(), name)
+        path = fname if os.path.isabs(fname) else os.path.join(UD, "strategies", fname)
+        return inside.describe(open(path, errors="ignore").read(), name)
     except Exception as e:
         return {"error": repr(e)[:200]}
 
@@ -227,31 +247,37 @@ def hourly_prices(pair):
         _PRICES[pair] = (known, d["close"].to_numpy("float64"))
     return _PRICES[pair]
 
+def marked_equity(s):
+    """(hours in ms, the wallet at each hour with open positions valued at that hour's price). Raises if it cannot be worked out."""
+    import numpy as np
+    hours = np.arange(-(-int(s["backtest_start_ts"]) // 3600000) * 3600000, int(s["backtest_end_ts"]) + 1, 3600000, dtype="int64")
+    if len(hours) < 2: raise ValueError("under two hours of record")
+    eq = np.full(len(hours), float(s.get("starting_balance") or 1000.0))
+    for t in s.get("trades") or []:
+        fills = sorted((o for o in t.get("orders") or [] if o.get("order_filled_timestamp")), key=lambda o: o["order_filled_timestamp"])
+        i0 = int(np.searchsorted(hours, t["open_timestamp"], "left")); i1 = int(np.searchsorted(hours, t["close_timestamp"], "left"))
+        eq[i1:] += float(t.get("profit_abs") or 0.0)  # once closed: the trade's real result, fees and funding included
+        if i1 <= i0 or not fills: continue
+        sign = -1.0 if t.get("is_short") else 1.0
+        ft = np.array([o["order_filled_timestamp"] for o in fills], dtype="int64")
+        amt = np.array([(1.0 if o["ft_is_entry"] else -1.0) * float(o["amount"]) for o in fills])
+        cash = np.array([(-sign if o["ft_is_entry"] else sign) * float(o["amount"]) * float(o["safe_price"]) for o in fills])
+        h = hours[i0:i1]
+        k = np.searchsorted(ft, h, "right") - 1; ok = k >= 0; k = np.clip(k, 0, None)
+        known, close = hourly_prices(t["pair"])
+        pk = np.searchsorted(known, h, "right") - 1; ok &= pk >= 0; pk = np.clip(pk, 0, None)
+        value = sign * np.cumsum(amt)[k] * close[pk] + np.cumsum(cash)[k]
+        if FUT: value = np.maximum(value, -float(t.get("max_stake_amount") or t.get("stake_amount") or 0.0))  # isolated margin: a position cannot lose more than its margin
+        eq[i0:i1] += np.where(ok, value, 0.0)
+    return hours, eq
+
 def marked_drawdown(s):
     """Worst drop of the wallet with open positions valued at each hour's price.
     Freqtrade's own drawdown only moves when a trade closes, so a bot that sits on a losing position (holding, a grid,
     a DCA bot, anything with leverage) looks safer than it was. Returns None when it cannot be worked out."""
     try:
         import numpy as np
-        hours = np.arange(-(-int(s["backtest_start_ts"]) // 3600000) * 3600000, int(s["backtest_end_ts"]) + 1, 3600000, dtype="int64")
-        if len(hours) < 2: return None
-        eq = np.full(len(hours), float(s.get("starting_balance") or 1000.0))
-        for t in s.get("trades") or []:
-            fills = sorted((o for o in t.get("orders") or [] if o.get("order_filled_timestamp")), key=lambda o: o["order_filled_timestamp"])
-            i0 = int(np.searchsorted(hours, t["open_timestamp"], "left")); i1 = int(np.searchsorted(hours, t["close_timestamp"], "left"))
-            eq[i1:] += float(t.get("profit_abs") or 0.0)  # once closed: the trade's real result, fees and funding included
-            if i1 <= i0 or not fills: continue
-            sign = -1.0 if t.get("is_short") else 1.0
-            ft = np.array([o["order_filled_timestamp"] for o in fills], dtype="int64")
-            amt = np.array([(1.0 if o["ft_is_entry"] else -1.0) * float(o["amount"]) for o in fills])
-            cash = np.array([(-sign if o["ft_is_entry"] else sign) * float(o["amount"]) * float(o["safe_price"]) for o in fills])
-            h = hours[i0:i1]
-            k = np.searchsorted(ft, h, "right") - 1; ok = k >= 0; k = np.clip(k, 0, None)
-            known, close = hourly_prices(t["pair"])
-            pk = np.searchsorted(known, h, "right") - 1; ok &= pk >= 0; pk = np.clip(pk, 0, None)
-            value = sign * np.cumsum(amt)[k] * close[pk] + np.cumsum(cash)[k]
-            if FUT: value = np.maximum(value, -float(t.get("max_stake_amount") or t.get("stake_amount") or 0.0))  # isolated margin: a position cannot lose more than its margin
-            eq[i0:i1] += np.where(ok, value, 0.0)
+        hours, eq = marked_equity(s)
         peak = np.maximum.accumulate(eq)
         return round(float(np.max((peak - eq) / np.where(peak > 0, peak, 1.0))), 6)
     except Exception as e:
@@ -282,10 +308,10 @@ def wants_market(why):
     """The refusal a strategy with market orders gets from a config priced for limit orders ("same" side of the book)."""
     return bool(why) and why.startswith("Market ") and "price_side" in why
 
-def backtest(name, start, tf=None, market=False):
+def backtest(name, start, tf=None, market=False, end=None, keep=False):
     code, out = sh(["freqtrade", "backtesting", "-c", CFG] + (["-c", MARKET_CFG] if market else [])
                    + ["--userdir", UD, "--strategy", name,
-                      "--timerange", start.strftime("%Y%m%d") + "-", "--export", "trades", "--cache", "none"]
+                      "--timerange", start.strftime("%Y%m%d") + "-" + (end.strftime("%Y%m%d") if end else ""), "--export", "trades", "--cache", "none"]
                    + (["--timeframe", tf] if tf else []), BT_TIMEOUT)
     if code == 124: return {"status": "timeout", "error": f"did not finish in {BT_TIMEOUT} seconds"}
     if code < 0: return {"status": "killed", "error": "stopped by the system, most likely for using too much memory"}
@@ -295,11 +321,11 @@ def backtest(name, start, tf=None, market=False):
         # either way; the note travels with the result so the site can show the same extra config in "run it yourself".
         # Of the 18 strategies this hid, 15 set market orders (13 in their own class, 2 through a parent class), one
         # sets a stoploss of 0, and two were not explained by reading their files: their reason is in the next run's data.
-        if not market and wants_market(why): return backtest(name, start, tf, True)
+        if not market and wants_market(why): return backtest(name, start, tf, True, end, keep)
         return {"status": "error", "error": "Freqtrade will not run this strategy with the lab's settings: " + why}
     if code != 0:
         if not tf and "Timeframe needs to be set" in out:  # example strategies that leave the timeframe to the user
-            return dict(backtest(name, start, "5m", market), timeframe_note="not set by the strategy; run on 5m")
+            return dict(backtest(name, start, "5m", market, end, keep), timeframe_note="not set by the strategy; run on 5m")
         if not FUT and "can_short" in out:  # the spot lab lists futures-only strategies but does not run them
             return {"status": "not_spot", "error": "futures-only strategy (it needs shorting); the lab runs spot"}
         log("backtest error", name, out[-600:])
@@ -321,7 +347,7 @@ def backtest(name, start, tf=None, market=False):
             "max_drawdown": s.get("max_drawdown_account", s.get("max_relative_drawdown")), "max_drawdown_marked": marked_drawdown(s),
             "winrate": s.get("winrate"), "wins": s.get("wins"), "losses": s.get("losses"),
             "market_change": s.get("market_change"), "start": s.get("backtest_start"), "end": s.get("backtest_end"),
-            **({"orders_note": MARKET_NOTE} if market else {})}
+            **({"orders_note": MARKET_NOTE} if market else {}), **({"_raw": s} if keep else {})}
 
 def lookahead(name, start, market=False):
     out_csv = "/tmp/lookahead.csv"
@@ -338,6 +364,165 @@ def lookahead(name, start, market=False):
     m = re.search(name + r".*?\|\s*(True|False)\s*\|", out)
     return (m.group(1) == "True") if m else None
 
+# ---- AI league --------------------------------------------------------------------------------------------------------
+SHIM = '''"""Written by the Strategy Lab (tas-workers strategy-lab/lab.py), not by the model. AI league, {season}.
+
+It loads the model's file exactly as it came, {rel} (SHA-256 {sha}), and runs its class {model_class}
+under the name {cls}, with one change the league's rules make for every bot: leverage is cut to {cap:g}x.
+"""
+import importlib.util as _iu
+from freqtrade.strategy import IStrategy  # noqa: F401
+_spec = _iu.spec_from_file_location({modname!r}, {path!r})
+_mod = _iu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+
+
+class {cls}(_mod.{model_class}):
+    def leverage(self, *args, **kwargs):
+        return min({cap!r}, float(super().leverage(*args, **kwargs)))
+'''
+
+def league_seasons():
+    """Every season with a league.json, sorted. Empty on the spot lab and until the first answers are committed."""
+    if not LEAGUE_DIR or not os.path.isdir(LEAGUE_DIR): return []
+    out = []
+    for f in sorted(glob.glob(os.path.join(LEAGUE_DIR, "*", "league.json"))):
+        try: m = json.load(open(f)); m["_dir"] = os.path.dirname(f); out.append(m)
+        except Exception as e: log("league.json not read:", f, repr(e)[:200])
+    return out
+
+def league_load_error(path):
+    """Why the model's file does not import, in one line (its own code, run the way Freqtrade would load it)."""
+    code, out = sh([sys.executable, "-c", "import importlib.util as u,sys; s=u.spec_from_file_location('m', sys.argv[1]); "
+                    "m=u.module_from_spec(s); s.loader.exec_module(m)", path], 180)
+    if code == 0: return None
+    return "the file does not load: " + (short_error(out) or ("timeout" if code == 124 else "no error line"))
+
+def install_league(reg):
+    """Copy each season's model files in once, unchanged, check them with admit(), and write the wrapper each bot runs as.
+    Returns {class name: (season, bot)} for the bots that can be run; the others carry their reason in the registry."""
+    runnable = {}
+    lg = reg.setdefault("league", {})
+    for m in league_seasons():
+        season = m["season"]; st = lg.setdefault(season, {"bots": {}, "start": None})
+        frozen_dir = os.path.join(UD, "league", season); os.makedirs(frozen_dir, exist_ok=True)
+        for b in m.get("bots", []):
+            cls = b["class"]; meta = st["bots"].setdefault(cls, {})
+            meta.update(lab=b.get("lab"), model=b.get("model"), model_id=b.get("model_id"), answered_at=b.get("answered_at"),
+                        answered_model=b.get("answered_model"), file=b.get("file"))
+            if not b.get("file"):
+                meta["status"] = "did_not_run"; meta["reason"] = b.get("note") or "no Python file in the answer"; continue
+            src = os.path.join(m["_dir"], b["file"]); dest = os.path.join(frozen_dir, b["file"])
+            if not os.path.exists(dest): shutil.copyfile(src, dest)
+            sha = sha256(dest); meta.setdefault("code_sha256", sha)
+            if meta["code_sha256"] != sha or sha256(src) != sha:
+                log("WARNING: league file changed since it was added:", season, b["file"])
+            shim = os.path.join(UD, "strategies", f"{LEAGUE_PREFIX}{season}_{cls}.py")
+            why, found = admit(open(dest, errors="ignore").read())
+            model_class = cls if cls in found else (found[0] if len(found) == 1 else None)
+            if why: why = "the lab's checker refused the file: it " + why
+            elif league_imports_outside(open(dest, errors="ignore").read()):
+                why = "it imports " + ", ".join(league_imports_outside(open(dest, errors="ignore").read())) + ", which the prompt did not allow"
+            elif not model_class: why = f"no class named {cls}, and {len(found)} other strategy classes to choose from"
+            else: why = league_load_error(dest)  # loaded once on its own first, so a file that hangs or crashes cannot stall the board's listing
+            if why:
+                meta["status"] = "did_not_run"; meta["reason"] = why
+                if os.path.exists(shim): os.remove(shim)
+                continue
+            if model_class != cls: meta["named"] = model_class  # it named its class differently: run as written, noted on the page
+            else: meta.pop("named", None)
+            open(shim, "w").write(SHIM.format(
+                season=season, rel=f"league/{season}/{b['file']}", sha=sha, model_class=model_class, cls=cls,
+                cap=float(m.get("leverage_cap", 3.0)), modname=f"tas_league_{season}_{cls}", path=dest))
+            meta["status"] = "ready"; meta.pop("reason", None)
+            runnable[cls] = (season, b)
+        if m.get("bots") and not st.get("start"):
+            st["start"] = str(dt.datetime.utcnow().date())  # the first day all its bots are in: the season's days count from here
+    return runnable
+
+def league_outcome(s, cap_dd):
+    """What the $1,000 became, the worst drop beside it, and the hour and reason the bot was retired, if it was.
+    Retired at the first liquidation of any position, or at the first hour the wallet (open positions at that hour's
+    price) is more than cap_dd below its peak so far. Its value is then the wallet at that hour; nothing after counts."""
+    import numpy as np
+    hours, eq = marked_equity(s)
+    peak = np.maximum.accumulate(eq); dd = (peak - eq) / np.where(peak > 0, peak, 1.0)
+    events = []
+    liq = [t for t in s.get("trades") or [] if t.get("exit_reason") == "liquidation"]
+    if liq:
+        t = min(liq, key=lambda t: t["close_timestamp"])
+        events.append((int(np.searchsorted(hours, t["close_timestamp"], "left")),
+                       f"liquidated: {t['pair']} " + ("short" if t.get("is_short") else "long")))
+    over = np.nonzero(dd > cap_dd)[0]
+    if len(over): events.append((int(over[0]), f"fell more than {cap_dd:.0%} from its peak"))
+    if events:
+        i, why = min(events); i = min(i, len(eq) - 1)
+        return {"value": round(float(eq[i]), 2), "worst_drop": round(float(np.max(dd[:i + 1])), 6), "retired": why,
+                "retired_at": dt.datetime.utcfromtimestamp(int(hours[i]) / 1000).strftime("%Y-%m-%d %H:%M")}
+    return {"value": round(float(eq[-1]), 2), "worst_drop": round(float(np.max(dd)), 6)}
+
+def run_league(reg, names, runnable, today):
+    """One table per season: every bot, run on the leverage board from the season's start for its days (30)."""
+    out = {}
+    for m in league_seasons():
+        season = m["season"]; st = reg["league"][season]; days_total = int(m.get("days", 30))
+        start = dt.date.fromisoformat(st["start"]); end = start + dt.timedelta(days=days_total); day = (today - start).days
+        rows = []
+        for b in m.get("bots", []):
+            cls = b["class"]; meta = st["bots"][cls]
+            r = {k: meta.get(k) for k in ("lab", "model", "model_id", "answered_model", "answered_at", "file", "code_sha256", "named")}
+            r["class"] = cls
+            if meta.get("file") and meta.get("code_sha256"):
+                r["inside"] = inside_of(os.path.join(UD, "league", season, meta["file"]), meta.get("named") or cls)
+            if meta.get("status") == "did_not_run":
+                r.update(status="did_not_run", reason=meta.get("reason")); rows.append(r); continue
+            if cls not in names:
+                r.update(status="did_not_run", reason=league_load_error(os.path.join(UD, "league", season, meta["file"])) or
+                         "Freqtrade did not list the strategy: its file loads, but Freqtrade could not read the class")
+                rows.append(r); continue
+            if meta.get("retired_lab"):
+                r.update(status="did_not_run", reason=meta["retired_lab"]); rows.append(r); continue
+            if meta.get("lookahead_bias") is None and meta.get("lookahead_tries", 0) < LOOKAHEAD_TRIES:
+                meta["lookahead_tries"] = meta.get("lookahead_tries", 0) + 1
+                reg["running"] = cls; save_json(REG, reg)
+                meta["lookahead_bias"] = lookahead(cls, today - dt.timedelta(days=20), bool(meta.get("market_orders")))
+                reg["running"] = None
+            r["lookahead_bias"] = meta.get("lookahead_bias")
+            if day < 1:
+                r.update(status="waiting", reason=f"its record starts on {start}"); rows.append(r); continue
+            reg["running"] = cls; save_json(REG, reg)
+            bt = backtest(cls, start, market=bool(meta.get("market_orders")), end=end if today >= end else None, keep=True)
+            reg["running"] = None
+            if bt.get("orders_note"): meta["market_orders"] = True
+            if bt.get("status") in ("timeout", "killed"):
+                meta["strikes"] = meta.get("strikes", 0) + 1
+                if meta["strikes"] >= STRIKES:
+                    meta["retired_lab"] = f"did not finish under the lab's limits {STRIKES} days in a row ({bt.get('error')})"
+                r.update(status="did_not_run", reason=bt.get("error")); rows.append(r); continue
+            meta["strikes"] = 0
+            if bt.get("status") != "ok":
+                r.update(status="did_not_run", reason=bt.get("error")); rows.append(r); continue
+            raw = bt.pop("_raw")
+            try: oc = league_outcome(raw, float(m.get("retire_drawdown", 0.30)))
+            except Exception as e:
+                log("league outcome not worked out:", cls, repr(e)[:200])
+                oc = {"value": round(1000.0 * (1 + float(bt.get("profit_total") or 0)), 2), "worst_drop": bt.get("max_drawdown_marked")}
+            r.update(status="retired" if oc.get("retired") else "ok", **oc,
+                     **{k: bt.get(k) for k in ("trades", "leverage", "liquidations", "shorts", "funding_fees", "winrate",
+                                               "market_change", "start", "end", "orders_note") if bt.get(k) is not None})
+            rows.append(r)
+        ranked = sorted([r for r in rows if r["status"] in ("ok", "retired")], key=lambda r: -r["value"])
+        for i, r in enumerate(ranked): r["rank"] = i + 1
+        out[season] = {"season": season, "title": m.get("title"), "start": str(start), "end": str(end),
+                       "day": max(0, min(day, days_total)), "days": days_total, "final": today >= end + dt.timedelta(days=1),
+                       "leverage_cap": m.get("leverage_cap", 3.0), "retire_drawdown": m.get("retire_drawdown", 0.30), "bots": rows}
+    return out
+
+def ft_version():
+    code, out = sh(["freqtrade", "--version"], 120)
+    m = re.search(r"freqtrade\s+([0-9][\w.\-]*)", out or "", re.I)
+    return m.group(1) if m else None
+
 def run_once():
     t0 = time.time(); today = dt.datetime.utcnow().date()
     reg = load_reg(); reg.setdefault("files", {}); reg.setdefault("strategies", {})
@@ -345,13 +530,16 @@ def run_once():
         strike(reg["strategies"][reg["running"]], "the lab stopped while it was running")
     reg["running"] = None
     install_baselines(reg["files"])
+    runnable = install_league(reg) if FUT else {}
     fetch_sources(reg["files"])
     fetch_pinned(reg)
     hashes = record_hashes(reg)
     names, list_err = list_strategies()
     if not names: raise RuntimeError("no strategies loaded: " + (list_err or "")[-400:])
     cf = class_files()
+    league_names = {n for n, f in cf.items() if f.startswith(LEAGUE_PREFIX)}  # league bots get their own table, never the board
     for n in names:
+        if n in league_names: continue
         if n not in reg["strategies"]:
             f = cf.get(n, ""); reg["strategies"][n] = {"added": str(today), "file": f, "source": reg["files"].get(f, ""), "lookahead_bias": None}
     save_json(REG, reg)
@@ -399,7 +587,10 @@ def run_once():
             r["seconds"] = round(time.time() - t1); reg["running"] = None
         results.append(r); log("result", n, r.get("status"), r.get("profit_total"))
     save_json(REG, reg)
-    summary = {"at": dt.datetime.utcnow().isoformat() + "Z", "strategies": len(results),
+    league = run_league(reg, names, runnable, today) if FUT and league_seasons() else {}
+    save_json(REG, reg)
+    summary = {"at": dt.datetime.utcnow().isoformat() + "Z", "strategies": len(results), "freqtrade_version": ft_version(),
+               "league_bots": sum(len(v["bots"]) for v in league.values()),
                "ok": sum(r.get("status") == "ok" for r in results), "live_days": max([r.get("days_live", 0) for r in results] or [0]),
                "errors": sum(r.get("status") == "error" for r in results), "retired": sum(r.get("status") == "retired" for r in results),
                "timeouts": sum(r.get("status") in ("timeout", "killed") for r in results),
@@ -409,7 +600,7 @@ def run_once():
                "inside_read": sum(bool((r.get("inside") or {}).get("sentence")) for r in results),
                "seconds": round(time.time() - t0), "list_error": list_err, "download_error": dl_err,
                "mode": MODE, "method": ("Leverage board. Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance USDT perpetual futures, 20 pairs, isolated margin, $1,000 paper wallet, 5 open trades, exchange fees and funding fees included, liquidations as the exchange's published margin tiers would trigger them. Shorting is allowed. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Never ranked together with the spot Strategy Lab." if FUT else "Two numbers per strategy, never mixed: a labelled backtest on the last 45 days, and the live out-of-sample record from the day it was added here. Binance spot candles, 20 pairs, $1,000 paper wallet, 5 open trades, exchange fees included. Spot only: no leverage, no shorting. Each strategy's code is frozen on the day it is added (its SHA-256 is published with its result). Community collections are pinned to one commit, and a file is admitted only if a read of its code shows it imports nothing but the libraries a strategy needs. A strategy that cannot finish three runs in a row is retired. Strategies flagged by Freqtrade's lookahead analysis are marked.")}
-    save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results})
+    save_json(os.path.join(PUB, "results.json"), {"as_of": str(today), "summary": summary, "results": results, **({"league": league} if league else {})})
     save_json(os.path.join(PUB, "not-admitted.json"), {"as_of": str(today), "about": "Files from the pinned community collections that were read and not admitted, with the reason.", "files": reg.get("rejected", {})})
     save_json(os.path.join(PUB, "status.json"), summary)
     open(os.path.join(UD, ".last_run_v4"), "w").write(str(today))
