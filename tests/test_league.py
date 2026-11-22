@@ -82,4 +82,24 @@ check("ta and arrow too", lab.league_imports_outside("import ta\nfrom arrow impo
 check("the allowed ones pass", lab.league_imports_outside("import talib.abstract as ta\nimport pandas_ta\nfrom datetime import datetime\n"
                                                           "from freqtrade.strategy import IStrategy, informative\nfrom technical import qtpylib\n") == [])
 
+
+# what the lookahead check found is kept for the page, as Freqtrade wrote it (2026-11-22)
+_csv = "/tmp/lookahead.csv"
+def _fake_sh(cmd, timeout):
+    open(_csv, "w").write("filename,strategy,has_bias,total_signals,biased_entry_signals,biased_exit_signals,biased_indicators\n"
+                          "x.py,TASLeagueX,True,20,0,0,\"btc_rsi, btc_ret6\"\n")
+    return 0, ""
+_sh = lab.sh; lab.sh = _fake_sh
+got = lab.lookahead("TASLeagueX", lab.dt.date(2026, 11, 1))
+check("a flagged bot keeps what was flagged", got is True and lab.LA_DETAIL.get("biased_indicators") == "btc_rsi, btc_ret6"
+      and lab.LA_DETAIL.get("biased_entry_signals") == "0", lab.LA_DETAIL)
+def _fake_sh2(cmd, timeout):  # what Freqtrade 2026.10 does when it can't decide: a header-only file and a log line
+    open(_csv, "w").write("filename,strategy,has_bias,total_signals,biased_entry_signals,biased_exit_signals,biased_indicators\n")
+    return 0, "INFO - found 9 trades which is less than minimum_trade_amount 10. Cancelling this backtest lookahead bias test."
+lab.sh = _fake_sh2
+got = lab.lookahead("TASLeagueX", lab.dt.date(2026, 11, 1))
+check("an undecided check keeps Freqtrade's reason", got is None
+      and lab.LA_DETAIL.get("has_bias") == "not decided: 9 trades in the test window, the check needs 10", lab.LA_DETAIL)
+lab.sh = _sh
+
 print("FAILURES:", 0 if ok else "see above"); sys.exit(0 if ok else 1)

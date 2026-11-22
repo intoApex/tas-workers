@@ -1,0 +1,18 @@
+{
+ "season": "preseason",
+ "title": "AI league preseason",
+ "source": "https://github.com/intoApex/tradingagentstack/tree/b222ea1409a35031d17d90a675edbec5f6a00273/data/league/preseason",
+ "source_commit": "b222ea1409a35031d17d90a675edbec5f6a00273",
+ "note": "Each .py here is bots/<slug>.py from that commit, byte for byte (its SHA-256 is the answer record's code_sha256). Never edited.",
+ "days": 30,
+ "leverage_cap": 3.0,
+ "retire_drawdown": 0.3,
+ "bots": [
+  {"lab": "OpenAI", "model": "GPT-6.2 Astra", "model_id": "openai/gpt-6.2-astra-20261117", "answered_model": "openai/gpt-6.2-astra", "provider": "Amazon Bedrock", "sent_at": "2026-11-22T13:38:44.319700Z", "answered_at": "2026-11-22T13:39:02.147859Z", "class": "TASLeaguePreGPT", "file": "gpt.py", "code_sha256": "537f5d44f75488fad15fd0120a6faaa6b7261ae3a59fb5e54d9a20c87f8a9916"},
+  {"lab": "Google", "model": "Gemini 4 Carbon", "model_id": "google/gemini-4-carbon-20261110", "answered_model": "google/gemini-4-carbon", "provider": "Google", "sent_at": "2026-11-22T13:38:44.320095Z", "answered_at": "2026-11-22T13:44:09.635747Z", "class": "TASLeaguePreGemini", "file": "gemini.py", "code_sha256": "61e5772e2fb525db33d1d4b09b494de5859115db20481583bc4d1e179911c8b6"},
+  {"lab": "Anthropic", "model": "Claude Fable 5.2", "model_id": "anthropic/claude-fable-5.2-20261109", "answered_model": "anthropic/claude-fable-5.2", "provider": "Azure", "sent_at": "2026-11-22T13:38:44.320606Z", "answered_at": "2026-11-22T13:45:16.478475Z", "class": "TASLeaguePreClaude", "file": "claude.py", "code_sha256": "df4f9485869c9a4482bffa82c8b17efe318daa8fa7d74e9d7996f80023beca08"},
+  {"lab": "xAI", "model": "Grok 4.7", "model_id": "x-ai/grok-4.7-20260916", "answered_model": "x-ai/grok-4.7", "provider": "xAI", "sent_at": "2026-11-22T13:38:44.320930Z", "answered_at": "2026-11-22T13:49:48.770854Z", "class": "TASLeaguePreGrok", "file": "grok.py", "code_sha256": "8304e133abef88a13746c9d10eb6301fb9bda0a7fb095e04c5a89738ee9c262d"},
+  {"lab": "DeepSeek", "model": "DeepSeek V4 Pro 0813", "model_id": "deepseek/deepseek-v4-pro-0813", "answered_model": "deepseek/deepseek-v4-pro-0813", "provider": "Together", "sent_at": "2026-11-22T13:38:44.321445Z", "answered_at": "2026-11-22T13:39:10.586254Z", "class": "TASLeaguePreDeepSeek", "file": "deepseek.py", "code_sha256": "5002187b16f8e0e18b035f9465f4099970a5c12793b47be7d10309fedbe45d24"},
+  {"lab": "Alibaba (Qwen)", "model": "Qwen4 Max", "model_id": "qwen/qwen4-max-20261115", "answered_model": "qwen/qwen4-max", "provider": "Alibaba", "sent_at": "2026-11-22T13:38:44.321808Z", "answered_at": "2026-11-22T13:51:42.288255Z", "class": "TASLeaguePreQwen", "file": "qwen.py", "code_sha256": "7227e4814837a9f45e54a3fe5a37b1451fd638bf556f748919aa53b841e418c5"}
+ ]
+}

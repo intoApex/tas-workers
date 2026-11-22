@@ -349,9 +349,12 @@ def backtest(name, start, tf=None, market=False, end=None, keep=False):
             "market_change": s.get("market_change"), "start": s.get("backtest_start"), "end": s.get("backtest_end"),
             **({"orders_note": MARKET_NOTE} if market else {}), **({"_raw": s} if keep else {})}
 
+LA_DETAIL = {}  # the last lookahead-analysis row: what it found (biased signals, biased indicators) or why it could not decide
+
 def lookahead(name, start, market=False):
     out_csv = "/tmp/lookahead.csv"
     if os.path.exists(out_csv): os.remove(out_csv)
+    LA_DETAIL.clear()
     code, out = sh(["freqtrade", "lookahead-analysis", "-c", CFG] + (["-c", MARKET_CFG] if market else [])
                    + ["--userdir", UD, "--strategy", name,
                     "--timerange", start.strftime("%Y%m%d") + "-", "-p", *LA_PAIRS,
@@ -359,9 +362,14 @@ def lookahead(name, start, market=False):
     if os.path.exists(out_csv):
         for row in csv.DictReader(open(out_csv)):
             if row.get("strategy") == name or len(row) and name in json.dumps(row):
+                LA_DETAIL.update({k: (row.get(k) or "").strip() for k in ("has_bias", "total_signals", "biased_entry_signals",
+                                                                           "biased_exit_signals", "biased_indicators")})
                 v = (row.get("has_bias") or "").strip().lower()
                 if v in ("true", "false"): return v == "true"
     m = re.search(name + r".*?\|\s*(True|False)\s*\|", out)
+    few = re.search(r"found (\d+) trades which is less than minimum_trade_amount (\d+)", out or "")
+    if not m and few and not LA_DETAIL.get("has_bias"):  # Freqtrade leaves the file empty when it can't decide
+        LA_DETAIL["has_bias"] = f"not decided: {few.group(1)} trades in the test window, the check needs {few.group(2)}"
     return (m.group(1) == "True") if m else None
 
 # ---- AI league --------------------------------------------------------------------------------------------------------
@@ -486,8 +494,11 @@ def run_league(reg, names, runnable, today):
                 meta["lookahead_tries"] = meta.get("lookahead_tries", 0) + 1
                 reg["running"] = cls; save_json(REG, reg)
                 meta["lookahead_bias"] = lookahead(cls, today - dt.timedelta(days=20), bool(meta.get("market_orders")))
+                meta["lookahead_detail"] = dict(LA_DETAIL) or None  # shown on the league page as found, e.g. which indicators
                 reg["running"] = None
             r["lookahead_bias"] = meta.get("lookahead_bias")
+            r["lookahead_detail"] = meta.get("lookahead_detail")
+            r["lookahead_tries"] = meta.get("lookahead_tries", 0)
             if day < 1:
                 r.update(status="waiting", reason=f"its record starts on {start}"); rows.append(r); continue
             reg["running"] = cls; save_json(REG, reg)
