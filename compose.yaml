@@ -28,11 +28,11 @@ services:
       - /srv/tas/data/strategy-lab:/freqtrade/user_data
       - /srv/tas/public/strategy-lab:/public/strategy-lab  # only its own results folder: it runs community code
     environment:
-      # 05:00 UTC since 2026-11-11 (was 22:00). The site fetches results once a day, in practice between 07:10 and 08:25 UTC
-      # (GitHub starts the 01:17 schedule that late). A 22:00 run was stamped with yesterday's date by the time the site showed
-      # it, so the board always read one day behind and a bot that joined showed "starts <yesterday>" for a day and a half.
-      # A 05:00 run takes about an hour, is stamped with today's date, and is two to three hours old when it goes up.
-      LAB_RUN_HOUR: "5"
+      # 02:00 UTC since 2026-11-23 (was 05:00, and 22:00 before Nov 11). The site now fetches results as soon as the leverage
+      # board finishes at about 04:15 UTC (deploy.sh asks GitHub to start "Data tracks"), and waits for this lab to finish too.
+      # A 05:00 run finished at 06:21 on Nov 23, so it would have held the whole day's data back by two hours; a 02:00 run
+      # (about 80 minutes) is done before the leverage board starts at 04:00, and is still stamped with today's date.
+      LAB_RUN_HOUR: "2"
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "12"
       LAB_CODE_REV: "10"  # bump to run at once with new code. Since 2026-11-12 the lab loads new code by itself between runs; the bump is only for "run now"
@@ -57,7 +57,7 @@ services:
       - /srv/tas/public/strategy-lab-futures:/public/strategy-lab-futures
     environment:
       LAB_MODE: futures
-      LAB_RUN_HOUR: "4"  # 04:00 UTC since 2026-11-11 (was 21:00): an hour before the spot lab, same day's date as the site's fetch
+      LAB_RUN_HOUR: "4"  # 04:00 UTC since 2026-11-11 (was 21:00). When it finishes, deploy.sh starts the site's "Data tracks" (2026-11-23)
       PYTHONUSERBASE: /home/ftuser/.local
       LAB_LOOKAHEAD_PER_DAY: "6"
       LAB_CODE_REV: "2"  # bump to run at once with new code (new code alone is loaded by the lab itself between runs)

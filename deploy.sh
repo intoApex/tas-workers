@@ -4,6 +4,9 @@
 #
 # Rules for everything in this repo:
 #   - No API keys, tokens, passwords or wallet keys. Bots run in dry-run (paper) mode on public market data.
+#     One exception, the owner's decision on 2026-11-23: a GitHub token that can only start the site's workflows, kept in
+#     /etc/tas/github-dispatch-token on the host (never in this repo, never in a folder a container mounts) and read only by
+#     dispatch/data_tracks.py below.
 #   - Public data only, through public or official endpoints, at a polite rate.
 #   - Output goes to /srv/tas/public (served read-only at https://workers.tradingagentstack.com/)
 #     or /srv/tas/data (kept on the server, not served).
@@ -79,6 +82,13 @@ fi
 if [ "$(date -u +%H%M)" -ge 0200 ] && { [ "$(cat "$DATA/.funding.day" 2>/dev/null)" != "$day" ] || [ funding/carry.py -nt "$DATA/.funding.day" ]; }; then
   timeout 1800 python3 funding/carry.py >"$DATA/funding.log" 2>&1; echo "$day" > "$DATA/.funding.day"
 fi
+
+# Start the site's "Data tracks" workflow as soon as the day's lab results are in (2026-11-23). GitHub starts its 01:17 UTC
+# schedule six to seven hours late, so the leverage board reached the site five hours after it finished.
+# Once per leverage-board run, when it is from today and the spot lab has finished too (or it's past 07:00 UTC). Runs on the
+# host, not in a container: the token never goes near the labs, which run community and AI-written code. No token file, no request.
+# Log: $DATA/datatracks-dispatch.log; public record of the last request: $PUBLIC/data-tracks-dispatch.json.
+timeout 60 python3 dispatch/data_tracks.py >>"$DATA/datatracks-dispatch.log" 2>&1
 
 # What is deployed (read by the TAS site and the weekly scorecard).
 jq -n \
