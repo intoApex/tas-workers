@@ -17,6 +17,10 @@ how the numbers on the site are produced.
 
 - **No keys, ever.** No exchange API keys, tokens, passwords or wallet keys in this repo or on the server.
   Bots run in dry-run (paper) mode on public market data, so they can't place a real order.
+  One exception, by the owner's decision on 2026-11-23: a fine-grained GitHub token limited to `intoApex/tradingagentstack`
+  with Actions read and write, which can start that repo's workflows and nothing else (no code, no secrets, no pushes). It is
+  in `/etc/tas/github-dispatch-token` on the host (owner `tas`, mode 600), never in this repo and never in a folder a container
+  mounts, and only `dispatch/data_tracks.py`, run by `deploy.sh` on the host, reads it. See "Starting the site's data job".
 - **Public data only**, through public or official endpoints, at a polite rate.
 - Every published number keeps the date it was measured and the source it came from.
 
@@ -39,6 +43,19 @@ Orderly, Kamino, Lagoon, dHEDGE): a past day's price is gone once the day is ove
   published file.
 - Test, no network: `python3 tests/test_pricebook.py`.
 
+## Starting the site's data job
+
+The site's "Data tracks" workflow (in the site repository) copies these files to the site once a day. Its GitHub schedule is
+01:17 UTC, but GitHub starts it six to seven hours late, so on Nov 23 the leverage board finished at 04:15 UTC and the site
+showed it at 09:25. Since 2026-11-23, `deploy.sh` runs `dispatch/data_tracks.py` every 10 minutes: once the leverage board has
+a run from today and the spot lab has finished too (or it is past 07:00 UTC), it asks GitHub to start "Data tracks" on main,
+once per leverage-board run, and retries a failed request up to six times. "Data refresh" follows it on the site's side. The
+schedule stays as the fallback and skips itself when the day's run already covered the same lab results.
+
+- Token: `/etc/tas/github-dispatch-token`, see the rule above. Without the file nothing is asked and the schedule does the job.
+- Last request (no token in it): https://workers.tradingagentstack.com/data-tracks-dispatch.json, log in `/srv/tas/data/datatracks-dispatch.log`.
+- Test, no network: `python3 tests/test_dispatch_data_tracks.py`.
+
 ## License
 
 MIT
@@ -46,7 +63,7 @@ MIT
 ## Services
 
 - `okx-copytrading` (compose.yaml, okx/snapshot.py): once a day, a snapshot of OKX's official public copy-trading endpoints (lead trader ranks, daily and weekly PnL, closed positions). Raw data stays on the server; https://workers.tradingagentstack.com/okx-status.json shows counts only.
-- `strategy-lab` (compose.yaml, strategy-lab/): forward tests of public open-source strategies (first source: freqtrade/freqtrade-strategies) on Binance spot candles, scored only on data after the day each strategy was added, with a one-time lookahead-bias check. Results: https://workers.tradingagentstack.com/strategy-lab/results.json Our own baselines are in `strategy-lab/baselines/`: hold, moving-average cross, dip buying, breakout and a coin-flip control (`tas_baselines.py`), and two grid bots, two DCA bots and plain weekly buying (`tas_baselines_2.py`). `tas_tradingview_builtins.py` restates fifteen of the example strategies that ship with TradingView's Strategy Tester (MACD, RSI, Supertrend and so on) with their default settings, long only, on 1-hour candles; it is our own code written from the rules, not TradingView's, and each class says in words what it does. A strategy's file is frozen on the day it is added: it is never replaced afterwards, and its SHA-256 is published with its result. New or changed baselines go in a new file under new class names. Community collections are listed in `PINNED` in `strategy-lab/lab.py`, each pinned to one commit and fetched once; a file is admitted only if a read of its code (it is not run) shows it imports nothing beyond what a strategy needs and does not open files or run commands, and the files that were not admitted are published with the reason at https://workers.tradingagentstack.com/strategy-lab/not-admitted.json A strategy that times out or is killed three runs in a row is retired. The container can write only to its own results folder. `strategy-lab/harness/` runs the lab offline against the real Freqtrade for tests.
+- `strategy-lab` (compose.yaml, strategy-lab/, daily from 02:00 UTC): forward tests of public open-source strategies (first source: freqtrade/freqtrade-strategies) on Binance spot candles, scored only on data after the day each strategy was added, with a one-time lookahead-bias check. Results: https://workers.tradingagentstack.com/strategy-lab/results.json Our own baselines are in `strategy-lab/baselines/`: hold, moving-average cross, dip buying, breakout and a coin-flip control (`tas_baselines.py`), and two grid bots, two DCA bots and plain weekly buying (`tas_baselines_2.py`). `tas_tradingview_builtins.py` restates fifteen of the example strategies that ship with TradingView's Strategy Tester (MACD, RSI, Supertrend and so on) with their default settings, long only, on 1-hour candles; it is our own code written from the rules, not TradingView's, and each class says in words what it does. A strategy's file is frozen on the day it is added: it is never replaced afterwards, and its SHA-256 is published with its result. New or changed baselines go in a new file under new class names. Community collections are listed in `PINNED` in `strategy-lab/lab.py`, each pinned to one commit and fetched once; a file is admitted only if a read of its code (it is not run) shows it imports nothing beyond what a strategy needs and does not open files or run commands, and the files that were not admitted are published with the reason at https://workers.tradingagentstack.com/strategy-lab/not-admitted.json A strategy that times out or is killed three runs in a row is retired. The container can write only to its own results folder. `strategy-lab/harness/` runs the lab offline against the real Freqtrade for tests.
   Each result also carries `inside`: what the strategy's code contains (candles, indicators its code calls, how it sells, where the
   stop sits) and one sentence built from those facts. `strategy-lab/inside.py` reads the frozen file with Python's `ast` module and
   never runs it; a value that isn't spelled out in the code is left out. Tests: `python3 tests/test_inside.py`.
